@@ -1,7 +1,7 @@
 # Memory_Movement
 
-Codes for How to fit memory-models 
-1. Empirical_approach 
+## Codes for How to fit memory-models 
+### Empirical_approach 
 -- 0.calculate.UDs.Rmd
 --- use ctmm package to fit the tracking data to a continuous-time movement model 
 --- calculate a Kriged occurrence distribution (OD) estimate per each year model 
@@ -14,4 +14,4 @@ Codes for How to fit memory-models
 -- 2.crane_memory.Rmd: 
 --- call each year tracking data (amt object) and fit SSFs per each yr data including the effects of landcovers + ODs for hatched year + ODs for the previous years 
 
-2. Mechanistic_approach
+### Mechanistic_approach
