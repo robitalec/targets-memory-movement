@@ -1,0 +1,138 @@
+---
+title: "2.crane_memory"
+author: "Dennis Kim"
+date: '2022-04-05'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load packages 
+```{r packages, message =FALSE, warning = FALSE}
+# data calling & wrangling 
+library(here)
+library(readr)
+library(tidyr)
+library(purrr)
+library(dplyr)
+library(forcats)
+
+# movement analysis 
+library(amt)
+```
+
+# Load Data
+```{r data call}
+# read summer data for id == 5C
+c515 = read_rds(here("data","summer_trk15_5c.Rdata"))
+c516 = read_rds(here("data","summer_trk16_5c.Rdata"))
+c517 = read_rds(here("data","summer_trk17_5c.Rdata"))
+c518 = read_rds(here("data","summer_trk18_5c.Rdata"))
+c519 = read_rds(here("data","summer_trk19_5c.Rdata"))
+c520 = read_rds(here("data","summer_trk20_5c.Rdata"))
+```
+
+# Prepare data for SSF fitting
+```{r ssf prep}
+# factorize the age year
+c515$age_yr <- factor(c515$age_yr, levels = c("hatch-yr", "second-yr", "third-yr", "fourth-yr", "fifth-yr", "sixth-yr", "adult"))
+c516$age_yr <- factor(c516$age_yr, levels = c("hatch-yr", "second-yr", "third-yr", "fourth-yr", "fifth-yr", "sixth-yr", "adult"))
+c517$age_yr <- factor(c517$age_yr, levels = c("hatch-yr", "second-yr", "third-yr", "fourth-yr", "fifth-yr", "sixth-yr", "adult"))
+c518$age_yr <- factor(c518$age_yr, levels = c("hatch-yr", "second-yr", "third-yr", "fourth-yr", "fifth-yr", "sixth-yr", "adult"))
+c519$age_yr <- factor(c519$age_yr, levels = c("hatch-yr", "second-yr", "third-yr", "fourth-yr", "fifth-yr", "sixth-yr", "adult"))
+c520$age_yr <- factor(c520$age_yr, levels = c("hatch-yr", "second-yr", "third-yr", "fourth-yr", "fifth-yr", "sixth-yr", "adult"))
+
+# drop the levels that are not present in the data
+c515$nlcd_category <- droplevels(as.factor(c515$nlcd_category))
+c516$nlcd_category <- droplevels(as.factor(c516$nlcd_category))
+c517$nlcd_category <- droplevels(as.factor(c517$nlcd_category))
+c518$nlcd_category <- droplevels(as.factor(c518$nlcd_category))
+c519$nlcd_category <- droplevels(as.factor(c519$nlcd_category))
+c520$nlcd_category <- droplevels(as.factor(c520$nlcd_category))
+
+# change the reference level 
+c515$nlcd_category <- fct_relevel(c515$nlcd_category, "wetlands") # wetlands 
+c516$nlcd_category <- fct_relevel(c516$nlcd_category, "wetlands") # wetlands 
+c517$nlcd_category <- fct_relevel(c517$nlcd_category, "wetlands") # wetlands 
+c518$nlcd_category <- fct_relevel(c518$nlcd_category, "wetlands") # wetlands 
+c519$nlcd_category <- fct_relevel(c519$nlcd_category, "wetlands") # wetlands 
+c520$nlcd_category <- fct_relevel(c520$nlcd_category, "wetlands") # wetlands 
+
+c515$age_yr <- fct_relevel(c515$age_yr, "hatch-yr")
+c516$age_yr <- fct_relevel(c516$age_yr, "hatch-yr")
+c517$age_yr <- fct_relevel(c517$age_yr, "hatch-yr")
+c518$age_yr <- fct_relevel(c518$age_yr, "hatch-yr")
+c519$age_yr <- fct_relevel(c519$age_yr, "hatch-yr")
+c520$age_yr <- fct_relevel(c520$age_yr, "hatch-yr")
+
+# calculate log sl and cos ta 
+c515$log_sl_ <- log(c515$sl_)
+c516$log_sl_ <- log(c516$sl_)
+c517$log_sl_ <- log(c517$sl_)
+c518$log_sl_ <- log(c518$sl_)
+c519$log_sl_ <- log(c519$sl_)
+c520$log_sl_ <- log(c520$sl_)
+
+c515$cos_ta_ <- cos(c515$ta_)
+c516$cos_ta_ <- cos(c516$ta_)
+c517$cos_ta_ <- cos(c517$ta_)
+c518$cos_ta_ <- cos(c518$ta_)
+c519$cos_ta_ <- cos(c519$ta_)
+c520$cos_ta_ <- cos(c520$ta_)
+```
+
+# Fitting SSF
+
+## 2017
+```{r fit17}
+# MODEL17: year 2017
+m17 <- fit_issf(case_ ~ nlcd_category + OD15 + OD16 + log_sl_ + strata(step_id_), data = c517)
+
+summary(m17)
+```
+
+**[Interpreation]**
+
+* OD15: Consider two locations (everything is constant) except different unit value in OD15, we would expect the animal to less likely select the locations with greater 2015 ODs in 2017 (1.035) - naive interpretation would be (more the effects of memory??) - (not significant)
+
+* OD16: Consider two locations (everything is constant) except different unit value in OD16, we would expect the animal to more likely select the locations with greater 2016 ODs in 2017 (1.035) - naive interpretation would be (less the effects of memory??)
+
+## 2018
+```{r fit18}
+# MODEL18: year 2018
+m18 <- fit_issf(case_ ~ nlcd_category + OD15 + OD16 + OD17 + log_sl_ + strata(step_id_), data = c518)
+
+summary(m18)
+```
+
+**[Interpreation]**
+
+* OD15: Consider two locations (everything is constant) except different unit value in OD15, we would expect the animal to more likely select the locations in 2018 with greater ODs (4.584695) - (not significant) - (less effects of memory?)
+
+* OD16: Consider two locations (everything is constant) except different unit value in OD16, we would expect the animal to less likely select the locations in 2018 with greater ODs (0.080046) - (more effects of memory??)
+
+* OD17: Consider two locations (everything is constant) except different unit value in OD17, we would expect the animal to less likely select the locations in 2019 with greater ODs (0.177267) - (more effects of memory??)
+
+## 2019
+```{r fit19}
+# MODEL19: year 2019
+m19 <- fit_issf(case_ ~ nlcd_category + OD15 + OD16 + OD17 + OD18 + log_sl_ + strata(step_id_), data = c519)
+
+summary(m19)
+```
+
+## 2020
+```{r fit20}
+# MODEL20: year 2020
+m20 <- fit_issf(case_ ~ nlcd_category + OD15 + OD16 + OD17 + OD18 + OD19 + log_sl_ + strata(step_id_), data = c520)
+
+summary(m20)
+```
+
+
+# Document Footer 
+```{r session info}
+sessionInfo()
+```
