@@ -1,0 +1,366 @@
+---
+title: "2.crane_memory"
+author: "Dennis Kim"
+date: '2022-04-05'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load packages 
+```{r packages, message =FALSE, warning = FALSE}
+# data calling & wrangling 
+library(here)
+library(readr)
+library(tidyr)
+library(purrr)
+library(dplyr)
+library(forcats)
+library(tibble)
+library(stringr)
+library(broom)
+
+# movement analysis 
+library(amt)
+
+# visualization
+library(ggplot2)
+library(jtools)
+library(ggstance)
+library(broom.mixed)
+```
+
+# Load Data
+```{r data call}
+# read summer data for id == 5A
+a515 = read_rds(here("data","summer_trk15_5A.Rdata"))
+a516 = read_rds(here("data","summer_trk16_5A.Rdata"))
+a517 = read_rds(here("data","summer_trk17_5A.Rdata"))
+a518 = read_rds(here("data","summer_trk18_5A.Rdata"))
+a519 = read_rds(here("data","summer_trk19_5A.Rdata"))
+a520 = read_rds(here("data","summer_trk20_5A.Rdata"))
+```
+
+# Prepare data for SSF fitting
+```{r ssf prep}
+# factorize the age year
+a515$age_yr <- factor(a515$age_yr, levels = c("hatch-yr", "second-yr", "third-yr", "fourth-yr", "fifth-yr", "sixth-yr", "adult"))
+a516$age_yr <- factor(a516$age_yr, levels = c("hatch-yr", "second-yr", "third-yr", "fourth-yr", "fifth-yr", "sixth-yr", "adult"))
+a517$age_yr <- factor(a517$age_yr, levels = c("hatch-yr", "second-yr", "third-yr", "fourth-yr", "fifth-yr", "sixth-yr", "adult"))
+a518$age_yr <- factor(a518$age_yr, levels = c("hatch-yr", "second-yr", "third-yr", "fourth-yr", "fifth-yr", "sixth-yr", "adult"))
+a519$age_yr <- factor(a519$age_yr, levels = c("hatch-yr", "second-yr", "third-yr", "fourth-yr", "fifth-yr", "sixth-yr", "adult"))
+a520$age_yr <- factor(a520$age_yr, levels = c("hatch-yr", "second-yr", "third-yr", "fourth-yr", "fifth-yr", "sixth-yr", "adult"))
+
+# drop the levels that are not present in the data
+a515$nlcd_category <- droplevels(as.factor(a515$nlcd_category))
+a516$nlcd_category <- droplevels(as.factor(a516$nlcd_category))
+a517$nlcd_category <- droplevels(as.factor(a517$nlcd_category))
+a518$nlcd_category <- droplevels(as.factor(a518$nlcd_category))
+a519$nlcd_category <- droplevels(as.factor(a519$nlcd_category))
+a520$nlcd_category <- droplevels(as.factor(a520$nlcd_category))
+
+# change the reference level 
+a515$nlcd_category <- fct_relevel(a515$nlcd_category, "wetlands") # wetlands 
+a516$nlcd_category <- fct_relevel(a516$nlcd_category, "wetlands") # wetlands 
+a517$nlcd_category <- fct_relevel(a517$nlcd_category, "wetlands") # wetlands 
+a518$nlcd_category <- fct_relevel(a518$nlcd_category, "wetlands") # wetlands 
+a519$nlcd_category <- fct_relevel(a519$nlcd_category, "wetlands") # wetlands 
+a520$nlcd_category <- fct_relevel(a520$nlcd_category, "wetlands") # wetlands 
+
+a515$age_yr <- fct_relevel(a515$age_yr, "hatch-yr")
+a516$age_yr <- fct_relevel(a516$age_yr, "hatch-yr")
+a517$age_yr <- fct_relevel(a517$age_yr, "hatch-yr")
+a518$age_yr <- fct_relevel(a518$age_yr, "hatch-yr")
+a519$age_yr <- fct_relevel(a519$age_yr, "hatch-yr")
+a520$age_yr <- fct_relevel(a520$age_yr, "hatch-yr")
+
+# calculate log sl and cos ta 
+a515$log_sl_ <- log(a515$sl_)
+a516$log_sl_ <- log(a516$sl_)
+a517$log_sl_ <- log(a517$sl_)
+a518$log_sl_ <- log(a518$sl_)
+a519$log_sl_ <- log(a519$sl_)
+a520$log_sl_ <- log(a520$sl_)
+
+a515$cos_ta_ <- cos(a515$ta_)
+a516$cos_ta_ <- cos(a516$ta_)
+a517$cos_ta_ <- cos(a517$ta_)
+a518$cos_ta_ <- cos(a518$ta_)
+a519$cos_ta_ <- cos(a519$ta_)
+a520$cos_ta_ <- cos(a520$ta_)
+```
+
+
+simplify the data 
+```{r OD simplification}
+# Set OD = 1 if the point is in a grid cell that was previously visited and 0 otherwise.
+a516$OD15[a516$OD15 > 0] <- 1
+a516$OD15[a516$OD15 < 0] <- 0
+summary(a516$OD15)
+
+a517$OD16[a517$OD16 > 0] <- 1
+a517$OD16[a517$OD16 < 0] <- 0
+summary(a517$OD16)
+
+a518$OD17[a518$OD17 > 0] <- 1
+a518$OD17[a518$OD17 < 0] <- 0
+summary(a518$OD17)
+
+a519$OD18[a519$OD18 > 0] <- 1
+a519$OD18[a519$OD18 < 0] <- 0
+summary(a519$OD18)
+
+a520$OD19[a520$OD19 > 0] <- 1
+a520$OD19[a520$OD19 < 0] <- 0
+summary(a520$OD19)
+```
+
+# Further data investigation 
+To ensure that 3 different measures of the locations and predictor in the data is reasonable
+* OD predictor in each of the grid cells 
+* counts of crane location in the same grid cells 
+* counts of available locations (generated using amt) in each of the grid cells 
+
+```{r visualization, fig.width=12,fig.height=10}
+# filter out each data of OD and cases_
+a516.df = a516 %>% select(OD15, case_, year) %>% rename(., ODprev = OD15)
+a517.df = a517 %>% select(OD16, case_, year) %>% rename(., ODprev = OD16)
+a518.df = a518 %>% select(OD17, case_, year) %>% rename(., ODprev = OD17)
+a519.df = a519 %>% select(OD18, case_, year) %>% rename(., ODprev = OD18)
+a520.df = a520 %>% select(OD19, case_, year) %>% rename(., ODprev = OD19)
+
+# bind all the filtered data 
+a5year = rbind(a516.df, a517.df, a518.df, a519.df, a520.df)
+
+# save the data 
+#write_rds(a5year, path = here("data", "summer_trk15_5A_avil_used_pts.Rdata"))
+
+# visualization the proportion based on each year on the OD prev 
+## count
+ggplot(a5year, aes(x = as.factor(ODprev), group = case_))+
+  geom_bar(position = position_dodge(), aes(fill = case_), stat = "count")+
+  scale_fill_brewer(palette = "Paired")+
+  labs(y = "Count", fill = "Used", x = "OD of previous year")+
+  facet_wrap(~year, scales = "free")+
+  ggtitle("(c) Distribution of used and available points in previous year's OD")
+
+## proportion
+ggplot(a5year, aes(x = as.factor(ODprev),group = case_))+
+    geom_bar(position= position_dodge(), aes(y=..prop.., fill = case_), stat = "count")+
+    scale_fill_brewer(palette="Paired")+
+    geom_text(aes(label = scales::percent(round(..prop.., 2)),
+                 y= ..prop.. ), stat= "count", vjust = -.3, position=position_dodge(0.9), size = 3) +
+    labs(y = "Proportion", fill = "used", x = "OD of previous year")+
+    facet_wrap(~year, scales = "free")
+```
+
+# Fitting SSF
+
+**[note]** 
+
+* **occurrence()** returns a distribution of where the animal might have been during the sampling period (or some range of times).
+* **Negative coefficients** suggest cranes do not prefer using past year's locations.  
+* **Positive coefficients** suggest they like to revisit past locations.
+
+## Without landcover classes 
+```{r no LC}
+# same coefficient range compared to the model fits with LC 
+#summary(fit_issf(case_ ~ OD15 + log_sl_ + strata(step_id_), data = a516)) # negative 
+#summary(fit_issf(case_ ~ OD16 + log_sl_ + strata(step_id_), data = a517)) # positive 
+#summary(fit_issf(case_ ~ OD17 + log_sl_ + strata(step_id_), data = a518)) # positive 
+#summary(fit_issf(case_ ~ OD18 + log_sl_ + strata(step_id_), data = a519)) # positive 
+#summary(fit_issf(case_ ~ OD19 + log_sl_ + strata(step_id_), data = a520)) # negative 
+```
+
+
+## 2016
+```{r fit16}
+# MODEL16: year 2016
+m16 <- fit_issf(case_ ~ nlcd_category + OD15 + log_sl_ + strata(step_id_), data = a516)
+
+summary(m16)
+```
+**[Interpreation]**
+
+* OD15: **negative coefficient: In 2016, the crane does not select the locations where they were in last year 2015.**
+
+## 2017
+```{r fit17}
+# MODEL17: year 2017
+m17 <- fit_issf(case_ ~ nlcd_category + OD16 + log_sl_ + strata(step_id_), data = a517)
+
+summary(m17)
+```
+**[Interpreation]**
+
+* OD16: **positive coefficient: In 2017, the crane selects the locations where they were in last year 2016.**
+
+## 2018
+```{r fit18}
+# MODEL18: year 2018
+m18 <- fit_issf(case_ ~ nlcd_category + OD17 + log_sl_ + strata(step_id_), data = a518)
+
+summary(m18)
+```
+**[Interpreation]**
+
+* OD17: **positive coefficient: in 2018, the crane selects the locations where they were in last year 2017.**
+
+## 2019
+```{r fit19}
+# MODEL19: year 2019
+m19 <- fit_issf(case_ ~ nlcd_category + OD18 + log_sl_ + strata(step_id_), data = a519)
+
+summary(m19)
+```
+**[Interpreation]**
+
+* OD18: **positive coefficient: In 2019, the crane selects the locations where they were in last year 2018.**
+
+## 2020
+```{r fit20}
+# MODEL20: year 2020
+m20 <- fit_issf(case_ ~ nlcd_category + OD19 + log_sl_ + strata(step_id_), data = a520)
+
+summary(m20)
+```
+**[Interpreation]**
+
+* OD19: **negative coefficient: In 2020, the crane does not the locations where they were in last year 2019.**
+
+# Summary 
+
+Overall, The crane 5A would like to select their hatched (2015) locations during their 2nd year (2016) when they were by themselves without any information about the landscape. During their 3rd year (2017), the crane started exploring possible habitats to select and did not select the previous year's location (2016). After getting information about the landscape, the crane continue to revisit the same locations throughout the years (2018, 2019, 2020).  
+
+# Visualization
+
+## tidy the data 
+First tidy the data and extract estimates and CIs of each model
+```{r tidy the vis data}
+# 2016
+coef.m16 <- m16$model$coefficients %>% tidy() %>% mutate(year = "2016")
+colnames(coef.m16) <- c("beta", "coefficient", "year")
+
+## extract CIs for the model fit and create a new column of the beta 
+conf.m16 <- m16$model %>% confint() %>% as.data.frame() %>% mutate(beta = c("nlcd_categorybarren","nlcd_categorycultivated", "nlcd_categorydeveloped","nlcd_categoryforest", "nlcd_categoryherbaceous","nlcd_categoryshrubland","nlcd_categorywater","OD15","log_sl_"))
+
+## reorder by column name for left join
+coef.m16 <- coef.m16[, c("year", "coefficient", "beta")]
+
+## left join the confint df to the coefficient df 
+fit.m16 <- left_join(coef.m16, conf.m16)
+fit.m16
+
+
+# 2017
+coef.m17 <- m17$model$coefficients %>% tidy() %>% mutate(year = "2017")
+colnames(coef.m17) <- c("beta", "coefficient", "year")
+
+## extract CIs for the model fit and create a new column of the beta 
+conf.m17 <- m17$model %>% confint() %>% as.data.frame() %>% mutate(beta = c("nlcd_categorycultivated", "nlcd_categorydeveloped","nlcd_categoryforest", "nlcd_categoryherbaceous","nlcd_categoryshrubland","nlcd_categorywater","OD16","log_sl_"))
+
+## reorder by column name for left join
+coef.m17 <- coef.m17[, c("year", "coefficient", "beta")]
+
+## left join the confint df to the coefficient df 
+fit.m17 <- left_join(coef.m17, conf.m17)
+fit.m17
+
+
+# 2018
+coef.m18 <- m18$model$coefficients %>% tidy() %>% mutate(year = "2018")
+colnames(coef.m18) <- c("beta", "coefficient", "year")
+
+## extract CIs for the model fit and create a new column of the beta 
+conf.m18 <- m18$model %>% confint() %>% as.data.frame() %>% mutate(beta = c("nlcd_categorycultivated", "nlcd_categorydeveloped","nlcd_categoryforest", "nlcd_categoryherbaceous","nlcd_categoryshrubland","nlcd_categorywater","OD17","log_sl_"))
+
+## reorder by column name for left join
+coef.m18 <- coef.m18[, c("year", "coefficient", "beta")]
+
+## left join the confint df to the coefficient df 
+fit.m18 <- left_join(coef.m18, conf.m18)
+fit.m18
+
+# 2019
+coef.m19 <- m19$model$coefficients %>% tidy() %>% mutate(year = "2019")
+colnames(coef.m19) <- c("beta", "coefficient", "year")
+coef.m19
+
+## extract CIs for the model fit and create a new column of the beta 
+conf.m19 <- m19$model %>% confint() %>% as.data.frame() %>% mutate(beta = c("nlcd_categorycultivated", "nlcd_categorydeveloped","nlcd_categoryforest", "nlcd_categoryherbaceous","nlcd_categoryshrubland","nlcd_categorywater","OD18","log_sl_"))
+
+## reorder by column name for left join
+coef.m19 <- coef.m19[, c("year", "coefficient", "beta")]
+
+## left join the confint df to the coefficient df 
+fit.m19 <- left_join(coef.m19, conf.m19)
+fit.m19
+
+# 2020
+coef.m20 <- m20$model$coefficients %>% tidy() %>% mutate(year = "2020")
+colnames(coef.m20) <- c("beta", "coefficient", "year")
+coef.m20
+
+## extract CIs for the model fit and create a new column of the beta 
+conf.m20 <- m20$model %>% confint() %>% as.data.frame() %>% mutate(beta = c("nlcd_categorycultivated", "nlcd_categorydeveloped","nlcd_categoryforest", "nlcd_categoryherbaceous","nlcd_categoryshrubland","nlcd_categorywater","OD19","log_sl_"))
+
+## reorder by column name for left join
+coef.m20 <- coef.m20[, c("year", "coefficient", "beta")]
+
+## left join the confint df to the coefficient df 
+fit.m20 <- left_join(coef.m20, conf.m20)
+fit.m20
+
+
+# bind all the data
+fit.M <- rbind(fit.m16, fit.m17, fit.m18, fit.m19, fit.m20)
+fit.M
+
+## change the column names 
+colnames(fit.M) <- c("year", "coefficient", "beta", "lowCI", "highCI")
+
+# reorder by column name 
+fit.M <- fit.M[, c("beta", "year", "coefficient", "lowCI", "highCI")]
+
+# change the row name for beta 
+fit.M$beta <- gsub("nlcd_category","", fit.M$beta) 
+fit.M$beta <- gsub("OD15","ODprev", fit.M$beta) 
+fit.M$beta <- gsub("OD16","ODprev", fit.M$beta)
+fit.M$beta <- gsub("OD17","ODprev", fit.M$beta)
+fit.M$beta <- gsub("OD18","ODprev", fit.M$beta)
+fit.M$beta <- gsub("OD19","ODprev", fit.M$beta)
+fit.M$beta <- gsub("log_sl_","logSL", fit.M$beta)
+
+fit.M
+```
+
+```{r visualization}
+# plot the coefficient visualization
+## drop the rows with barren and herbaceous (their estimates are bigger range than the other predictors) - hard to see the trends for the other predictors 
+fit.M1 <- subset(fit.M, beta != "barren" & beta != "herbaceous")
+
+## save the estimates df 
+#write_rds(fit.M1, path = here("data", "5A_summer_estimates.Rdata"))
+
+# re-order the beta labels 
+coef.vis <- fit.M1 %>% dplyr::mutate(beta = forcats::fct_relevel(beta, sort)) %>% 
+ggplot(., aes(coefficient, beta, colour = beta)) +
+  geom_vline(xintercept = 0, lty=2, lwd=1, colour = "grey50")+
+  geom_point(size = 3, pch = 20, position = position_dodge(width = 0.5))+
+  geom_linerange(aes(xmax = highCI, xmin = lowCI))+
+  xlim(-5, 5)+
+  theme_bw()+
+  facet_grid(~ year)+
+  xlab("Effect size")+
+  theme(legend.position = "none",
+        axis.title.y = element_blank())
+
+coef.vis
+```
+
+# Document Footer 
+```{r session info}
+sessionInfo()
+```
