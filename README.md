@@ -12,6 +12,13 @@
   - convert the tracking data to amt object for fitting ssf 
 
 - 2.crane_memory.Rmd: 
-  - call each year tracking data (amt object) and fit SSFs per each yr data including the effects of landcovers + ODs for hatched year + ODs for the previous years 
+  - call each year tracking data (amt object) 
+  - fit SSFs per each yr data including the effects of landcovers + ODs for hatched year + ODs for the previous years 
+
+- 3.crane_visualization.Rmd:
+  - create a 3-panel visualization 
+    - a plot with the raw locations 
+    - a beta coefficient effect size plot 
+    - a used: availability locations plot
 
 ### Brown_Bear
