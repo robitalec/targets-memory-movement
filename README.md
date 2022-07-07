@@ -1,7 +1,7 @@
 # Memory_Movement
 
 ## Codes for How to fit memory-models 
-### Empirical_approach 
+### Sandhill_Crane 
 - 0.calculate.UDs.Rmd
   - use ctmm package to fit the tracking data to a continuous-time movement model 
   - calculate a Kriged occurrence distribution (OD) estimate per each year model 
