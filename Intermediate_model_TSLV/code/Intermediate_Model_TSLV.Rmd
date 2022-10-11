@@ -1,0 +1,273 @@
+---
+title: "1.amt_conv"
+author: "Dennis Kim"
+date: "2022-10-06"
+output: html_document
+---
+
+# Objective 
+
+To explore the structure of the bear data set. To do this, I will: 
+
+1. Generate used and available locations of the bear through amt framework. 
+2. Extract habitat covariate from habitat layer. 
+3. Create a sf polygon per each step length representing a buffer 
+4. Calculate the points that fall within each buffer and count the number of locations that revisited 
+5. Similar to Uli's paper, the locations that are not visited to each buffer will count as 0, otherwise +1 
+6. Include TSLV values per each location and save them in the column of the data 
+7. Fit SSF model with a TSLV predictor 
+
+## Document Preamble 
+```{r preamble, include = FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(DT)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(amt)
+library(ggplot2)
+library(raster)
+library(sf)
+library(recurse)
+library(scales)
+library(sp)
+library(geosphere)
+library(generics)
+library(sfheaders)
+options(width = 150)
+
+# set knitr options 
+opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
+```
+
+## Tracking data 
+
+Read in the gps data 
+```{r read gps data}
+# Location data of the bear 
+bear <- read.csv(here::here("data", "GF1143_raw.csv"))
+
+# change the time format of the data 
+bear$datetime <- as.POSIXct(bear$datetime, format =  "%Y-%m-%d %H:%M")
+
+# summary of the data
+summary(bear)
+```
+
+Plot the data 
+```{r bear location vis}
+ggplot(bear, aes(x = x, y = y))+ 
+  geom_point()
+```
+
+## Prepare environmental data 
+
+Add environmental covariate (berry)
+```{r habitat layer}
+# call the berries layer
+berry <- raster(here("data/berries/berries.tif"))
+
+# plot the layer
+plot(berry)
+
+# crs of the layer 
+crs(berry)
+```
+
+
+## amt conversion 
+
+Add a track class to the data and summarize the data 
+```{r amt conversion}
+# make tracks 
+trk.bear <- amt::make_track(bear, .x=x, .y=y, .t=datetime, crs=CRS("+init=epsg:26908"))
+
+summary(trk.bear)
+```
+
+Summarize the sampling rates of the bear
+```{r sampling rates}
+# 4 hour sampling seems reasonable - no need to resample - since it is already resampled 
+summarize_sampling_rate(trk.bear) 
+```
+
+change the track point to step 
+1. Resample track and filter bursts 
+2. Convert track to steps 
+3. Create random steps 
+4. Extract covariate values 
+```{r retrk bear}
+# follow the above approach 
+ssfdat.bear <- 
+  trk.bear %>% track_resample(rate = hours(4), tolerance = minutes(30)) %>% 
+  steps_by_burst() %>% 
+  random_steps(n_control = 5) %>% 
+  extract_covariates(berry) %>% 
+  filter(!is.na(ta_))
+
+# summary of the ssf data
+summary(ssfdat.bear)
+```
+
+Check the reasonable buffer distance for each step length - I will pick 500m as a buffer distance from the step lengths 
+```{r sl distribution}
+ssfdat.bear %>% filter(case_ == "TRUE") %>% dplyr::select(sl_) %>% summary()
+```
+
+## Time Since Last Visit 
+
+select randomized and used locations of the tracks from the ssfdat.bear
+```{r st points}
+# select observed locations
+obs.loc <- ssfdat.bear %>% filter(case_ == "TRUE") %>% dplyr::select(x1_, y1_)
+colnames(obs.loc) <- c("x", "y")
+
+# select random locations
+ran.loc <- ssfdat.bear %>% filter(case_ == "FALSE") %>% dplyr::select(x2_, y2_)
+colnames(ran.loc) <- c("x", "y")
+
+# combine the locations
+all.loc <- rbind(obs.loc, ran.loc)
+
+# convert the all location to st points 
+all.loc.sf <- st_as_sf(all.loc, coords = c("x", "y"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs")
+all.loc.sf %>% head()
+```
+
+create a sf linestring object representing a step length between 2 observed locations within the whole trajectory 
+```{r time since last visit calc}
+# select observed locations only    
+obs.step <- ssfdat.bear %>% filter(case_ == "TRUE") %>% dplyr::select(x1_,y1_, x2_, y2_)
+colnames(obs.step) <- c("x1", "y1", "x2", "y2")
+head(obs.step)
+
+# make a sf linestring representing each step length
+## functions for making sf linestrings
+make_line <- function(xy2){
+    st_linestring(matrix(xy2, nrow=2, byrow=TRUE))
+}
+
+make_lines <- function(df, names=c("x1","y1","x2","y2")){
+    m = as.matrix(df[,names])
+    lines = apply(m, 1, make_line, simplify=FALSE)
+    st_sfc(lines)
+}
+
+sf_pts_to_lines <- function(df, names=c("x1","y1","x2","y2")){
+    geom = make_lines(df, names)
+    df = st_sf(df, geometry=geom)
+    df
+}
+
+# make linestrings (step length) geometry
+sl_df <- sf_pts_to_lines(obs.step) %>% dplyr::select(geometry)
+
+# set the crs 
+st_crs(sl_df) <- "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs"
+
+head(sl_df)
+
+# plot the SL geometry
+plot(sl_df)
+```
+
+calculate the buffer area with the 500m distance from each focal step length 
+```{r sl intersection}
+# create 500 m buffer zone of each step length
+sl.buffer = st_buffer(sl_df, 500)
+
+# plot the sl buffer 
+plot(sl.buffer)
+```
+
+Follow Uli's approach: Their definition of TSLV is short and sweet (see equation 4 in that paper) - basically, it's 0 if the point in question is within some distance δ (this value could be similar to the value you used for your buffer) of the previous point, and otherwise it's (previous TSLV + 1). So they define it iteratively, starting at the first point and iteratively updating TSLV with each time step.
+```{r yes within or no}
+# check if it is working properly by plotting the first sl buffer with points
+plot(sl.buffer$geometry[1]) # select the buffer of the first step length
+plot(all.loc.sf$geometry, add = TRUE) # put all the locations to see if some of them are within the location
+
+# identify if any points are within each step length bufferzone 
+within.buffer <- st_contains(sl.buffer, all.loc.sf)
+# convert to df 
+within.buffer <- within.buffer %>% as.data.frame()
+# change the colnames - the inital df will have 2 columns called row.id and col.id - this represnts row.id as buffer id and col.id as pt id that is counted within the buffer 
+colnames(within.buffer) <- c("buffer.id", "pt.id")
+# check the data
+head(within.buffer)
+
+# calculate the tslv of each point based every step buffer - nest by each unique pt id so that we have information about how many sl buffer locations that each location pt revisited and we count the nubmer of revisitation that each point has and stored it as tslv column
+tslv.id <- within.buffer %>% nest_by(pt.id) %>% mutate(tslv = map(data, length)) %>% unnest(tslv) %>% dplyr::select(pt.id, tslv)
+# check the data
+tslv.id %>% head()
+```
+
+merge the tslv information to the point data 
+```{r merge tslv}
+# create an id column for the points 
+all.loc.sf <- all.loc.sf %>% mutate(pt.id = c(1:3814))
+summary(all.loc.sf)
+
+# left merge the data
+tslv.df <- left_join(all.loc.sf, tslv.id)
+
+# convert geometry back to lat and long
+tslv.df1 <- tslv.df %>% mutate(x = unlist(map(tslv.df$geometry,1)),
+                   y = unlist(map(tslv.df$geometry,2))) %>% dplyr::select(x, y, tslv) %>% st_drop_geometry()
+
+tslv.df1
+```
+
+include tslv information to the original data
+```{r amt tslv}
+# extract tslv values per observed and random locations 
+obs.loc.tslv <- left_join(obs.loc, tslv.df1) %>% mutate(case_ = TRUE)
+colnames(obs.loc.tslv) <- c("x1_", "y1_", "tslv", "case_")
+obs.loc.tslv %>% head()
+
+ran.loc.tslv <- left_join(ran.loc, tslv.df1) %>% mutate(case_ = FALSE)
+colnames(ran.loc.tslv) <- c("x2_", "y2_", "tslv", "case_")
+ran.loc.tslv %>% head()
+
+# merge the tslv values per observed and random locations in ssf data 
+## first merge the observed locations tslv
+ssfdat.bear1 <- left_join(ssfdat.bear, obs.loc.tslv)
+ssfdat.bear1
+
+## second merge with the random locations tslv
+ssfdat.bear2 <- left_join(ssfdat.bear1, ran.loc.tslv, by = c("x2_", "y2_", "case_"))
+ssfdat.bear2
+
+# unite the tslv columns 
+ssfdat.bear.final <- ssfdat.bear2 %>% mutate(TSLV = coalesce(tslv.x, tslv.y)) %>% replace_na(list(TSLV = 0)) %>% dplyr::select(-c(tslv.x, tslv.y))
+ssfdat.bear.final
+
+# save the data 
+#write_rds(ssfdat.bear.final, path = here("data", "ssf_dat.Rdata"))
+```
+
+
+## FitSSF
+```{r fit ssf}
+# only resource predictor 
+ssfdat.bear.final %>% amt::fit_issf(case_ ~ berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+
+# TSLV predictor included
+ssfdat.bear.final %>% amt::fit_issf(case_ ~ berries+ TSLV+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+
+# Interaction between TSLV and berries
+ssfdat.bear.final %>% amt::fit_issf(case_ ~ berries+ TSLV+ TSLV:berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+```
+*Interpretation*
+- TSLV: the general idea is that animals may avoid recently used areas. This may be for many reasons - e.g., a predatory animal like a wolf will not hunt in the same patch because the prey animals there will get used to the presence of a predator and hide. Or alternatively, a grazing forager may exhaust all the vegetation in a patch and be forced to move elsewhere to eat. In areas where the animal has not been recently, it's more likely that resources will be "refreshed", making them more attractive to visit. And of course it is spatial (or spatio-temporal) memory that is driving the animal's ability to navigate to these locations. All in all, this is quite similar to what you have suggested but I figured it's good to provide biological background for what the hypotheses behind this model are.
+
+- TSLV:berries: animals move more slowly in areas that they haven't visited in a while where the berries are present (negative interaction)
+
+## Footer
+```{r footer}
+sessionInfo()
+```
