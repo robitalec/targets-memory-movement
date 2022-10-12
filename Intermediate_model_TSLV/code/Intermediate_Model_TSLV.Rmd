@@ -253,17 +253,14 @@ obs.tslv <- comp.obs.buffer %>% group_by(pt.id) %>%
              ifelse(row_number(last.visit.time.step) == 1, 100, 
              # otherwise, calculate the time between the last visit to the current time step            
              current.time.step - (last.visit.time.step)
-             ))))%>% 
-  # create an actual updated TSLV by subtracting the earlier tslv value 
-  mutate(updated.tslv = tslv - lag(tslv)) %>%
+             ))))%>%
   # only select the latest updated tslv value per id
   slice_tail(n = 1)
 
-# NA values indicate that there is no updated tslv values
-obs.tslv <- obs.tslv %>% mutate(updated.tslv = coalesce(updated.tslv, tslv))
-
 # summary(obs.tslv)
 obs.tslv %>% summary()
+
+obs.tslv
 ```
 
 ### random locations with updated TSLV
@@ -298,7 +295,7 @@ nest.ran.pts$last.visit.time.step[which(nest.ran.pts$last.visit.time.step %>% is
 nest.ran.buf <- nest.ran.pts %>% ungroup(pt.id) %>% nest_by(buffer.id)
 
 # current visit time step (NOTE:: make sure to update this!!! based on how many random steps it generates!)
-nest.ran.buf$current.time.step = c(1:513)
+nest.ran.buf$current.time.step = c(1:511)
 
 # unnest the data and call it as comp.buffer
 comp.ran.buffer <- nest.ran.buf %>%  unnest(data) %>% ungroup(buffer.id)
@@ -318,22 +315,17 @@ ran.tslv <- comp.ran.buffer %>% group_by(pt.id) %>%
              ifelse(current.time.step == last.visit.time.step | current.time.step == (last.visit.time.step+1), 0, 
              
              # otherwise, calculate the time between the last visit to the current time step 
-             last.visit.time.step - current.time.step), 
+             current.time.step - last.visit.time.step), 
              
              # case 2: if current time step is equal or greater than the last visit time step by 1, then set it as 0
              ifelse(current.time.step == last.visit.time.step | current.time.step == (last.visit.time.step+1), 0, 
              # otherwise, set the first last visit time step as 100 
              ifelse(row_number(last.visit.time.step) == 1, 100, 
              # otherwise, calculate the time between the last visit to the current time step            
-             last.visit.time.step - current.time.step
-             ))))%>% 
-  # create an actual updated TSLV by subtracting the earlier tslv value 
-  mutate(updated.tslv = tslv - lag(tslv)) %>%
+             current.time.step - last.visit.time.step
+             )))) %>% 
   # only select the latest updated tslv value per id
   slice_tail(n = 1)
-
-# NA values indicate that there is no updated tslv values
-ran.tslv <- ran.tslv %>% mutate(updated.tslv = coalesce(updated.tslv, tslv))
 
 # check the data
 summary(ran.tslv)
@@ -349,12 +341,12 @@ Merge the updated tslv information to each observed and random point data
 obs.loc.sf <- obs.loc.sf %>% mutate(pt.id = c(1:534))
 
 # only select the applied ids 
-obs.tslv.df <- obs.tslv %>% dplyr::select(pt.id, updated.tslv)
+obs.tslv.df <- obs.tslv %>% dplyr::select(pt.id, tslv)
 
 # Random - Apply same below 
 ran.loc.sf <- ran.loc.sf %>% mutate(pt.id = c(1:534))
 
-ran.tslv.df <- ran.tslv %>% dplyr::select(pt.id, updated.tslv)
+ran.tslv.df <- ran.tslv %>% dplyr::select(pt.id, tslv)
 ```
 
 merge the tslv information to the point data 
@@ -368,11 +360,11 @@ ran.df <- left_join(ran.loc.sf, ran.tslv.df)
 # convert geometry back to lat and long
 ## observed
 obs.df1 <- obs.df %>% mutate(x = unlist(map(obs.df$geometry,1)),
-                   y = unlist(map(obs.df$geometry,2))) %>% dplyr::select(x, y, updated.tslv) %>% st_drop_geometry()
+                   y = unlist(map(obs.df$geometry,2))) %>% dplyr::select(x, y, tslv) %>% st_drop_geometry()
 
 ## random
 ran.df1 <- ran.df %>% mutate(x = unlist(map(ran.df$geometry,1)),
-                   y = unlist(map(ran.df$geometry,2))) %>% dplyr::select(x, y, updated.tslv) %>% st_drop_geometry() 
+                   y = unlist(map(ran.df$geometry,2))) %>% dplyr::select(x, y, tslv) %>% st_drop_geometry() 
 ```
 
 include tslv information to the original data
