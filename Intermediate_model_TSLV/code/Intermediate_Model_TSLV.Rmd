@@ -42,6 +42,9 @@ library(sfheaders)
 library(lubridate)
 library(pastecs)
 library(stats)
+library(mapview)
+library(tmap)
+library(spatialEco)
 options(width = 150)
 
 # set knitr options 
@@ -109,7 +112,7 @@ change the track point to step
 ssfdat.bear <- 
   trk.bear %>% track_resample(rate = hours(4), tolerance = minutes(30)) %>% 
   steps_by_burst() %>% 
-  random_steps(n_control = 1) %>% 
+  random_steps(n_control = 5) %>% 
   extract_covariates(berry) %>% 
   filter(!is.na(ta_))
 
@@ -122,15 +125,13 @@ Check the reasonable buffer distance for each step length - I will pick 500m as 
 ssfdat.bear %>% filter(case_ == "TRUE") %>% dplyr::select(sl_) %>% summary()
 ```
 
-## Create step points
+## Create observation points
 
 select randomized and used locations of the tracks from the ssfdat.bear
 ```{r st points}
 # select random locations that matched with observed step lengths 
-obs <- ssfdat.bear %>% filter(case_ == "TRUE")
-
+obs <- ssfdat.bear %>% filter(case_ == TRUE)
 ran <- ssfdat.bear %>% filter(case_ == FALSE)
-matched.ran <- subset(ran, x1_ %in% obs$x1_)
 
 # select observed locations
 obs.loc <- obs %>% dplyr::select(x1_, y1_)
@@ -138,318 +139,192 @@ colnames(obs.loc) <- c("x", "y")
 obs.loc.sf <- st_as_sf(obs.loc, coords = c("x", "y"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs")
 obs.loc.sf %>% head()
 
+## mapview
+mapview(obs.loc.sf, cex = 3, alpha = 0.5, popup = NULL)
+
 # select random locations
-ran.loc <- matched.ran %>% dplyr::select(x2_, y2_)
+ran.loc <- ran %>% dplyr::select(x2_, y2_)
 colnames(ran.loc) <- c("x", "y")
 ran.loc.sf <- st_as_sf(ran.loc, coords = c("x", "y"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs")
 ran.loc.sf %>% head()
+
+## mapview
+mapview(ran.loc.sf, cex = 3, alpha = 0.5, popup = NULL)
 ```
 
-## create a buffer grids
+## create a square grid 
 
-create a sf linestring object representing a step length between 2 observed locations within the whole trajectory 
-```{r sl creation}
-# select observed locations only    
-obs.step <- obs %>% dplyr::select(x1_,y1_, x2_, y2_)
-colnames(obs.step) <- c("x1", "y1", "x2", "y2")
-head(obs.step)
+we will first create a grid which the extent equals to the bounding box of the selected points
+```{r grid cells}
+# create 1000m x 1000m grid cell in the map 
+area_bear_visit_grid = st_make_grid(obs.loc.sf, c(1000, 1000), what = "polygons", square = TRUE)
+area_bear_visit_grid
 
-# make a sf linestring representing each step length
-## functions for making sf linestrings
-make_line <- function(xy2){
-    st_linestring(matrix(xy2, nrow=2, byrow=TRUE))
-}
+# To sf and add grid ID
+fishnet_grid_sf = st_sf(area_bear_visit_grid) %>%
+  # add grid ID
+  mutate(grid_id = 1:length(lengths(area_bear_visit_grid)))
 
-make_lines <- function(df, names=c("x1","y1","x2","y2")){
-    m = as.matrix(df[,names])
-    lines = apply(m, 1, make_line, simplify=FALSE)
-    st_sfc(lines)
-}
-
-sf_pts_to_lines <- function(df, names=c("x1","y1","x2","y2")){
-    geom = make_lines(df, names)
-    df = st_sf(df, geometry=geom)
-    df
-}
-
-# make linestrings (step length) geometry
-sl_df <- sf_pts_to_lines(obs.step) %>% dplyr::select(geometry)
-
-# set the crs 
-st_crs(sl_df) <- "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs"
-
-head(sl_df)
-
-# plot the SL geometry
-plot(sl_df)
+# create a grid sf for observed and random 
+fishnet_grid_sf_obs <- fishnet_grid_sf
+fishnet_grid_sf_ran <- fishnet_grid_sf
 ```
-
-calculate the buffer area with the 500m distance from each focal step length 
-```{r sl buffer}
-# create 500 m buffer zone of each step length
-sl.buffer = st_buffer(sl_df, 500)
-
-# plot the sl buffer 
-plot(sl.buffer)
-```
-
-
 ## Time Since Last Vitist (TSLV)
 
 Follow Uli's approach: Their definition of TSLV is short and sweet (see equation 4 in that paper) - basically, it's 0 if the point in question is within some distance δ (this value could be similar to the value you used for your buffer) of the previous point, and otherwise it's (previous TSLV + 1). So they define it iteratively, starting at the first point and iteratively updating TSLV with each time step.
 
-### Observed locations with updated TSLV
+### Observed Locations 
+Then count the number of revisitations from observed locations
+```{r obs: count grid}
+# count number of points in each grid
+# https://gis.stackexchange.com/questions/323698/counting-points-in-polygons-with-sf-package-of-r
+fishnet_grid_sf_obs$obs_n_colli = lengths(st_intersects(fishnet_grid_sf_obs, obs.loc.sf))
 
-Observed points within the step length buffers
-```{r obs: yes within or no}
-# check if it is working properly by plotting the first sl buffer with points
-#plot(sl.buffer$geometry[1]) # select the buffer of the first step length
-#plot(obs.loc.sf$geometry, add = TRUE) # put all the locations to see if some of them are within the location
-
-# identify if any points are within each step length bufferzone 
-obs.within.buffer <- st_contains(sl.buffer, obs.loc.sf)
-# convert to df 
-obs.within.buffer <- obs.within.buffer %>% as.data.frame()
-# change the colnames - the inital df will have 2 columns called row.id and col.id - this represnts row.id as buffer id and col.id as pt id that is counted within the buffer 
-colnames(obs.within.buffer) <- c("grid.id", "observation.id")
-# check the data
-head(obs.within.buffer)
+# remove grid without value of 0 (i.e. no points in side that grid)
+fishnet_grid_sf_obs
 ```
 
-```{r obs: inital prep}
-# set the time index data 
-## index
-index.data <- data.frame(1:534)
-colnames(index.data) <- "observation.id"
+To check the result, plot the grid into a interactive thematic map with tmap.
+```{r, obs:grid map}
+tmap_mode("view")
 
-# create a list to store data frame
-## total observation list 
-obs.grid.list <- list()
+map_fishnet_obs = tm_shape(fishnet_grid_sf_obs) +
+  tm_fill(
+    col = "obs_n_colli",
+    palette = "Reds",
+    style = "cont",
+    title = "Number of Observed point revisited",
+    id = "grid_id",
+    showNA = FALSE,
+    alpha = 0.5,
+    popup.vars = c(
+      "Number of revisitations: " = "obs_n_colli"
+    ),
+    popup.format = list(
+      obs_n_colli = list(format = "f", digits = 0)
+    )
+  ) +
+  tm_borders(col = "grey40", lwd = 0.7)
 
-# for loop for calculating the tslv 
-for (i in 1:534) {
-  # group by grid id and filter information of observation visit per unique grid 
-  obs.grid.list[[i]] <- obs.within.buffer %>% group_by(grid.id) %>% filter(grid.id == i)
-  # ungroup each list 
-  obs.grid.list[[i]] <- obs.grid.list[[i]] %>% ungroup(grid.id)
-  # create a tslv, set the areas observation used as 0  
-  obs.grid.list[[i]] <- obs.grid.list[[i]] %>% mutate(tslv = 0)
-  # add the time index information (534 time step) to the data so that we could capture the tslv between observed locations
-  obs.grid.list[[i]] <- index.data %>% left_join(obs.grid.list[[i]], by = "observation.id")
-  # fill out the grid id 
-  obs.grid.list[[i]] <- obs.grid.list[[i]] %>% mutate(grid.id = i)
-  
-  # update the tslv values 
-  obs.grid.list[[i]] <- obs.grid.list[[i]] %>% 
-  # create a indicator column where all the traveling time steps considered as 1 first 
-  mutate(tslv1 = replace_na(tslv, 1)) %>% 
-  # group by visited observations 
-  mutate(grp = cumsum(tslv1 == 0)) %>%
-  group_by(grp) %>% 
-  # +1 to tslv as the animals traveling outside the visited location and reset as 0 when they visit the next location and restart counting the tslv  
-  mutate(tslv2 = ifelse(tslv1 == 1, lag(cumsum(tslv1 == 1))+1, 0)) %>% 
-  # replace the first step the animal is away from the visited location as 1 since it was converted back to NA due to the prior condition codes  
-  mutate(tslv3 = replace_na(tslv2, 1)) %>% 
-  # ungroup by grp
-  ungroup(grp) %>% 
-  # only select the final output of calculated tslv 
-  dplyr::select(c(grid.id, observation.id, tslv3)) 
-
-  # rename the column for further analysis 
-  colnames(obs.grid.list[[i]]) <- c("grid.id", "observation.id", "TSLV")
-}
+map_fishnet_obs
 ```
 
-Take a look at some dataframe per grid to check if the tslv is updated right
-```{r obs: tslv inspection}
-# first grid 
-obs.grid.list[[1]]
+convert geometry back to lat and long
+```{r obs:geom to latlong}
+# extract observation locations that fall into the grid
+obs.tslv <- point.in.poly(obs.loc.sf, fishnet_grid_sf_obs) %>% as.data.frame() %>% 
+# create a column called tslv and set 0 for all as a start point
+  mutate(tslv = 0) %>% 
+# calculate the time between the last visit to the location and the beginning of the actual trajectory   
+  mutate(tslv1 = grid_id - lag(grid_id, default = first(grid_id))) 
 
-# last grid
-obs.grid.list[[534]]
+# only filter out those who visited during the initial phase 
+ini.obs <- obs.tslv %>% filter(grid_id < 100)
+
+# only filter out those who never visited during the initial phase 
+# for the first row, subtract by the length of the initialization phase (100)
+aft.ini.obs <- obs.tslv %>% filter(grid_id > 100) %>% mutate(tslv1 = ifelse(row_number() == 1, grid_id - 100, tslv1))
+
+# rbind the modified initial phase and after observations and make sure to have absolute value  
+final.obs.tslv <- rbind(ini.obs, aft.ini.obs) %>% abs() %>% dplyr::select(-tslv)
+# change the colnames 
+colnames(final.obs.tslv) <- c("observation.id", "timestep.visited", "n.revisitation", "x1_", "y1_", "TSLV")
+final.obs.tslv %>% head()
+```
+### Random Locations 
+
+*[Do the exact same framework as above]*
+Then count the number of revisitations from observed locations
+```{r ran: count grid}
+# count number of points in each grid
+# https://gis.stackexchange.com/questions/323698/counting-points-in-polygons-with-sf-package-of-r
+fishnet_grid_sf_ran$ran_n_colli = lengths(st_intersects(fishnet_grid_sf_ran, ran.loc.sf))
+
+# remove grid without value of 0 (i.e. no points in side that grid)
+fishnet_grid_sf_ran
 ```
 
-Select the last row of each dataframe that captures the tslv values for further analysis 
-```{r obs: tslv filter}
-# select the last row per each dataframe 
+To check the result, plot the grid into a interactive thematic map with tmap.
+```{r, ran:grid map}
+tmap_mode("view")
 
-# create a true list for tslv 
-tslv.list = list()
+map_fishnet_ran = tm_shape(fishnet_grid_sf_ran) +
+  tm_fill(
+    col = "ran_n_colli",
+    palette = "Reds",
+    style = "cont",
+    title = "Number of random point revisited",
+    id = "grid_id",
+    showNA = FALSE,
+    alpha = 0.5,
+    popup.vars = c(
+      "Number of revisitations: " = "ran_n_colli"
+    ),
+    popup.format = list(
+      ran_n_colli = list(format = "f", digits = 0)
+    )
+  ) +
+  tm_borders(col = "grey40", lwd = 0.7)
 
-for (i in 1:534) {
-tslv.list[[i]] <- obs.grid.list[[i]] %>% tail(., n = 1)  
-}
+map_fishnet_ran
 ```
 
+convert geometry back to lat and long
+```{r ran:geom to latlong}
+# extract observation locations that fall into the grid
+ran.tslv <- point.in.poly(ran.loc.sf, fishnet_grid_sf_ran) %>% as.data.frame() %>%
+# create a column called tslv and set 0 for all as a start point
+  mutate(tslv = 0) %>% 
+# calculate the time between the last visit to the location and the beginning of the actual trajectory   
+  mutate(tslv1 = grid_id - lag(grid_id, default = first(grid_id))) 
 
-Now we will bind the list of dataframes representing each observation throughout the time to one dataframe.
-```{r obs: last bit clearning}
-# history of tslv per grid
-obs.point.tslv <- rbindlist(obs.grid.list, fill = TRUE)
+# only filter out those who visited during the initial phase 
+ini.ran <- ran.tslv %>% filter(grid_id < 100)
 
-# save the data 
-#write_rds(obs.point.tslv, path = here("data", "obs.point.tslv.Rdata"))
+# only filter out those who never visited during the initial phase 
+# for the first row, subtract by the length of the initialization phase (100)
+aft.ini.ran <- ran.tslv %>% filter(grid_id > 100) %>% mutate(tslv1 = ifelse(row_number() == 1, grid_id - 100, tslv1))
 
-# actual tslv data we will use for further analysis 
-obs.tslv <- rbindlist(tslv.list, fill = TRUE) %>% dplyr::select(-observation.id)
-obs.tslv %>% summary()
+# rbind the modified initial phase and after ranervations and make sure to have absolute value  
+final.ran.tslv <- rbind(ini.ran, aft.ini.ran) %>% abs() %>% dplyr::select(-tslv)
+# change the colnames 
+colnames(final.ran.tslv) <- c("observation.id", "timestep.visited", "n.revisitation", "x2_", "y2_", "TSLV")
+# you can see there is an NA values in TSLV which means we have missing observations so there are areas that are almost surely used but where tslv does not get updated due to a gap in the data 
 
-# save the data 
-#write_rds(obs.tslv, path = here("data", "obs.tslv.Rdata"))
-```
+# we will be calculating the tslv to minimize this gap 
+final.ran.tslv <- final.ran.tslv %>% 
+  # calculate the time between the last visit to the location and the beginning of the actual trajectory   
+  mutate(tslv1 = replace_na(TSLV, 0)) %>% 
+  mutate(TSLV = timestep.visited - lag(timestep.visited, default = first(timestep.visited))) %>% 
+  dplyr::select(-tslv1) %>% abs()
 
-### random locations with updated TSLV
-
-[Do the exact same framework as above]
-
-Get the information about the random points within each buffer grid
-```{r random: yes within or no}
-# check if it is working properly by plotting the first sl buffer with points
-#plot(sl.buffer$geometry[1]) # select the buffer of the first step length
-#plot(ran.loc.sf$geometry, add = TRUE) # put all the locations to see if some of them are within the location
-
-# identify if any points are within each step length bufferzone 
-ran.within.buffer <- st_contains(sl.buffer, ran.loc.sf)
-# convert to df 
-ran.within.buffer <- ran.within.buffer %>% as.data.frame()
-# change the colnames - the inital df will have 2 columns called row.id and col.id - this represnts row.id as buffer id and col.id as pt id that is counted within the buffer 
-colnames(ran.within.buffer) <- c("grid.id", "observation.id")
-# check the data
-head(ran.within.buffer)
-```
-
-```{r ran:inital prep}
-# we will use the same index data we created for the previous analysis 
-
-# create a list to store data frame
-## total random list 
-ran.grid.list <- list()
-
-# for loop for calculating the tslv 
-for (i in 1:534) {
-  # group by grid id and filter information of observation visit per unique grid 
-  ran.grid.list[[i]] <- ran.within.buffer %>% group_by(grid.id) %>% filter(grid.id == i)
-  # ungroup each list 
-  ran.grid.list[[i]] <- ran.grid.list[[i]] %>% ungroup(grid.id)
-  # create a tslv, set the areas observation used as 0  
-  ran.grid.list[[i]] <- ran.grid.list[[i]] %>% mutate(tslv = 0)
-  # add the time index information (534 time step) to the data so that we could capture the tslv between observed locations
-  ran.grid.list[[i]] <- index.data %>% left_join(ran.grid.list[[i]], by = "observation.id")
-  # fill out the grid id 
-  ran.grid.list[[i]] <- ran.grid.list[[i]] %>% mutate(grid.id = i)
-  
-  # update the tslv values 
-  ran.grid.list[[i]] <- ran.grid.list[[i]] %>% 
-  # create a indicator column where all the traveling time steps considered as 1 first 
-  mutate(tslv1 = replace_na(tslv, 1)) %>% 
-  # group by visited observations 
-  mutate(grp = cumsum(tslv1 == 0)) %>%
-  group_by(grp) %>% 
-  # +1 to tslv as the animals traveling outside the visited location and reset when they visit the next location and restart counting the tslv  
-  mutate(tslv2 = ifelse(tslv1 == 1, lag(cumsum(tslv1 == 1))+1, 0)) %>% 
-  # replace the first step the animal is away from the visited location as 1 since it was converted back to NA due to the prior condition codes  
-  mutate(tslv3 = replace_na(tslv2, 1)) %>% 
-  # ungroup by grp
-  ungroup(grp) %>% 
-  # only select the final output of calculated tslv 
-  dplyr::select(c(grid.id, observation.id, tslv3)) 
-
-  # rename the column for further analysis 
-  colnames(ran.grid.list[[i]]) <- c("grid.id", "observation.id", "TSLV")
-}
-```
-
-Take a look at some dataframe per observation to check if the tslv is updated right
-```{r ran:tslv inspection}
-# first observation 
-ran.grid.list[[1]]
-
-# last observation 
-ran.grid.list[[534]]
-```
-
-Select the last row of each dataframe that captures the tslv values for further analysis 
-```{r ran: tslv filter}
-# select the last row per each dataframe 
-
-# create a true list for tslv 
-tslv.list1 = list()
-
-for (i in 1:534) {
-tslv.list1[[i]] <- ran.grid.list[[i]] %>% tail(., n = 1)  
-}
-```
-
-Now we will bind the list of dataframes representing each observation throughout the time to one dataframe.
-```{r ran: last bit clearning}
-# whole dataframe 
-ran.point.tslv <- rbindlist(ran.grid.list, fill = TRUE)
-
-# save the data 
-#write_rds(ran.point.tslv, path = here("data", "ran.point.tslv.Rdata"))
-
-# actual tslv data we will use for further analysis 
-ran.tslv <- rbindlist(tslv.list1, fill = TRUE) %>% dplyr::select(-observation.id)
-ran.tslv %>% summary()
-
-# save the data 
-#write_rds(ran.tslv, path = here("data", "ran.tslv.Rdata"))
+final.ran.tslv %>% head()
 ```
 
 ### Merge the data
 
-Merge the updated tslv information to each observed and random sf point data
-```{r merge tslv}
-# Observed sf - create an id column for the points 
-obs.loc.sf <- obs.loc.sf %>% mutate(grid.id = c(1:534))
-
-# Random sf - Apply same below 
-ran.loc.sf <- ran.loc.sf %>% mutate(grid.id = c(1:534))
-```
-
-merge the tslv information to the point data 
-```{r convert sf to df tslv}
-# observe 
-obs.df <- left_join(obs.loc.sf, obs.tslv)
-
-ran.df <- left_join(ran.loc.sf, ran.tslv)
-
-# convert geometry back to lat and long
-## observed
-obs.df1 <- obs.df %>% mutate(x = unlist(map(obs.df$geometry,1)),
-                   y = unlist(map(obs.df$geometry,2))) %>% dplyr::select(x, y, grid.id, TSLV) %>% st_drop_geometry()
-
-## random
-ran.df1 <- ran.df %>% mutate(x = unlist(map(ran.df$geometry,1)),
-                   y = unlist(map(ran.df$geometry,2))) %>% dplyr::select(x, y, grid.id, TSLV) %>% st_drop_geometry() 
-```
-
 include tslv information to the original data
 ```{r amt tslv}
 # extract updated tslv values per observed and random locations 
-obs.loc.TSLV <- left_join(obs.loc, obs.df1) %>% mutate(case_ = TRUE) %>% dplyr::select(-grid.id)
-colnames(obs.loc.TSLV) <- c("x1_", "y1_", "tslv", "case_")
+obs.loc.TSLV <- final.obs.tslv %>% mutate(case_ = TRUE) %>% dplyr::select(-c(observation.id, timestep.visited, n.revisitation))
 obs.loc.TSLV %>% head()
 
-ran.loc.TSLV <- left_join(ran.loc, ran.df1) %>% mutate(case_ = FALSE) %>% dplyr::select(-grid.id)
-colnames(ran.loc.TSLV) <- c("x2_", "y2_", "tslv", "case_")
+ran.loc.TSLV <- final.ran.tslv %>% mutate(case_ = FALSE) %>% dplyr::select(-c(observation.id, timestep.visited, n.revisitation))
 ran.loc.TSLV %>% head()
 
 # select ssfdat filtered by TRUE and extract the tslv values 
 ssfdat.bear.true <- ssfdat.bear %>% filter(case_ == TRUE)
 ssfdat.bear.true1 <- ssfdat.bear.true %>% left_join(., obs.loc.TSLV, by = c("x1_", "y1_", "case_")) 
-ssfdat.bear.true1 %>% head()
 
 # same for false  
 ssfdat.bear.false <- ssfdat.bear %>% filter(case_ == FALSE)
 ssfdat.bear.false1 <- ssfdat.bear.false %>% left_join(., ran.loc.TSLV, by = c("x2_", "y2_", "case_")) 
+
 # as you can tell, there is NA tslv values in available step lengths - this indicates that they are not generated from the observed locations - so we would like to omit them here as well. 
-ssfdat.bear.false1 <- ssfdat.bear.false1 %>% filter(complete.cases(tslv))
-ssfdat.bear.false1 %>% head()
+ssfdat.bear.false1 <- ssfdat.bear.false1 %>% filter(complete.cases(TSLV))
 
 # brind all the rows of both used and available locations with tslv information 
 ssfdat.bear.final <- rbind(ssfdat.bear.true1, ssfdat.bear.false1) 
-colnames(ssfdat.bear.final)[14] <- "TSLV"
 ssfdat.bear.final %>% summary()
 
 # save the data 
