@@ -329,15 +329,24 @@ ssfdat.bear.false1 <- ssfdat.bear.false1 %>% filter(complete.cases(TSLV))
 ssfdat.bear.final <- rbind(ssfdat.bear.true1, ssfdat.bear.false1) 
 ssfdat.bear.final %>% summary()
 
+ssfdat.bear.final
+
 # save the data 
 #write_rds(ssfdat.bear.final, path = here("data", "ssfdat_final_tslv.Rdata"))
 ```
 
 TSLV visualization
 ```{r TSLV visualization}
+# overall plot - there is a few steps that has really long TSLV values than the others 
 ssfdat.bear.final %>% filter(step_id_ > 100 & case_==1) %>% ggplot(., aes(x = x1_, y = y1_, col = TSLV))+
   geom_point(size=2)+geom_path() +
   scale_color_gradient2(low = "yellow", mid = "darkblue", high = "red") +
+  theme_void()
+
+# zoom-in
+ssfdat.bear.final %>% filter(step_id_ > 100 & case_==1) %>% ggplot(., aes(x = x1_, y = y1_, col = TSLV))+
+  geom_point(size=2)+geom_path() +
+  scale_color_gradient2(low = "yellow", mid = "darkblue", high = "red", limits = c(0, 500)) +
   theme_void()
 ```
 
