@@ -47,6 +47,8 @@ library(tmap)
 library(spatialEco)
 library(paletteer)
 library(wesanderson)
+library(doBy)
+library(stars)
 options(width = 150)
 
 # set knitr options 
@@ -139,51 +141,105 @@ ran <- ssfdat.bear %>% filter(case_ == FALSE)
 obs.loc <- obs %>% dplyr::select(x1_, y1_)
 colnames(obs.loc) <- c("x", "y")
 obs.loc.sf <- st_as_sf(obs.loc, coords = c("x", "y"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs")
-obs.loc.sf %>% head()
+obs.loc %>% head()
 
 ## mapview
-mapview(obs.loc.sf, cex = 3, alpha = 0.5, popup = NULL)
+#mapview(obs.loc.sf, cex = 3, alpha = 0.5, popup = NULL)
 
 # select random locations
 ran.loc <- ran %>% dplyr::select(x2_, y2_)
 colnames(ran.loc) <- c("x", "y")
 ran.loc.sf <- st_as_sf(ran.loc, coords = c("x", "y"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs")
-ran.loc.sf %>% head()
+ran.loc %>% head()
 
 ## mapview
-mapview(ran.loc.sf, cex = 3, alpha = 0.5, popup = NULL)
+#mapview(ran.loc.sf, cex = 3, alpha = 0.5, popup = NULL)
 ```
 
-## create a square grid 
+## create a temporal spatial cognitive map 
 
 we will first create a grid which the extent equals to the bounding box of the selected points
 ```{r grid cells}
-# create 1000m x 1000m grid cell in the map 
-area_bear_visit_grid = st_make_grid(obs.loc.sf, c(1000, 1000), what = "polygons", square = TRUE)
-area_bear_visit_grid
+# create 2000m x 2000m grid cell in the map (24 x 20)
+memory.map = st_make_grid(obs.loc.sf, c(2000, 2000), what = "polygons", square = TRUE)
+memory.map
 
-# To sf and add grid ID
-fishnet_grid_sf = st_sf(area_bear_visit_grid) %>%
-  # add grid ID
-  mutate(grid_id = 1:length(lengths(area_bear_visit_grid)))
+# convert the map to sf object
+memory.map.sf = st_sf(memory.map)
 
-# create a grid sf for observed and random 
-fishnet_grid_sf_obs <- fishnet_grid_sf
-fishnet_grid_sf_ran <- fishnet_grid_sf
+# plot the map
+memory.map.sf %>% plot()
 ```
+
 ## Time Since Last Vitist (TSLV)
 
 Follow Uli's approach: Their definition of TSLV is short and sweet (see equation 4 in that paper) - basically, it's 0 if the point in question is within some distance δ (this value could be similar to the value you used for your buffer) of the previous point, and otherwise it's (previous TSLV + 1). So they define it iteratively, starting at the first point and iteratively updating TSLV with each time step.
 
-### Observed Locations 
-Then count the number of revisitations from observed locations
-```{r obs: count grid}
-# count number of points in each grid
-# https://gis.stackexchange.com/questions/323698/counting-points-in-polygons-with-sf-package-of-r
-fishnet_grid_sf_obs$obs_n_colli = lengths(st_intersects(fishnet_grid_sf_obs, obs.loc.sf))
 
-# remove grid without value of 0 (i.e. no points in side that grid)
-fishnet_grid_sf_obs
+### Observed Locations 
+
+Burn-in phase
+```{r}
+# create a burn in list 
+burnin.obs.list <- list()
+burnin.obs.ras.list <- list()
+
+# for first 100 phase 
+for(i in 1:100){
+# calculate the animal's visitation to a each grid cell (1 indicates animal visited that particular grid, otherwise 0)  
+burnin.obs.list[[i]] <- memory.map.sf %>% mutate(visit = lengths(st_intersects(memory.map.sf, obs.loc.sf[i,1])))
+
+# convert to raster
+burnin.obs.ras.list[[i]] <- burnin.obs.list[[i]] %>% raster(ncol= 20, nrow = 24)
+
+# insert the visited value per each raster map
+values(burnin.obs.ras.list[[i]]) <- burnin.obs.list[[i]]$visit
+}
+
+burnin.obs.ras.list[[1]] %>% plot()
+```
+
+Write function to calculate run length to specified value. If the specified run value (y) is the first value it returns a 0 and if it is missing then a NA is returned.
+```{r tslv}
+# tslv function
+time.since.last.visit <- function(x, y=1, dir=c("LR", "RL")) {
+    if(dir[1] == "RL") x <- rev(x)
+    # compute the lengths and values of runs of equal values in a vector -- or the reverse operation
+      x.idx <- rle(x)$values
+      v.idx <- rle(x)$lengths 
+    # if the x is equal to y (1) visited   
+    if(x[1] == y) {
+      # then equal to 0
+      v <- 0
+    } else {
+      v <- v.idx[which(x.idx == y)-1][1]
+    }   
+  return( v )
+}
+
+# stack all the raster layers: each layer will have a value of one observation at time t 
+r = raster::brick(burnin.obs.ras.list)
+# calculate tslv 
+(tslv1 <- calc(r, fun=time.since.last.visit))
+
+# plot the tslv values 
+tslv1 %>% plot()
+
+
+#Now, apply it to a raster stack example
+memory.map.sf <- memory.map.sf %>% mutate(tslv = values(t2e)) 
+memory.map.sf %>% data.frame()
+```
+
+
+
+```{r obs: count grid}
+# count number odfpoints in each grid
+# https://gis.stackexchange.com/questions/323698/counting-points-in-polygons-with-sf-package-of-r
+bear.sp.tmp.map.sf$visit = lengths(st_intersects(bear.sp.tmp.map.sf, obs.loc.sf))
+
+bear.ini.memory.map <- bear.sp.tmp.map.sf %>% mutate(tslv = ifelse(visit == 1, 0, NA)) %>% as.data.frame() %>% mutate(tslv = values(t2e))
+bear.ini.memory.map
 ```
 
 To check the result, plot the grid into a interactive thematic map with tmap.
@@ -214,25 +270,12 @@ map_fishnet_obs
 convert geometry back to lat and long
 ```{r obs:geom to latlong}
 # extract observation locations that fall into the grid
-obs.tslv <- point.in.poly(obs.loc.sf, fishnet_grid_sf_obs) %>% as.data.frame() %>% 
-# create a column called tslv and set 0 for all as a start point
-  mutate(tslv = 0) %>% 
-# calculate the time between the last visit to the location and the beginning of the actual trajectory   
-  mutate(tslv1 = grid_id - lag(grid_id, default = first(grid_id))) 
+obs.tslv <- point.in.poly(obs.loc.sf, bear.sp.tmp.map.sf) %>% as.data.frame() 
+obs.tslv
 
-# only filter out those who visited during the initial phase 
-ini.obs <- obs.tslv %>% filter(grid_id < 100)
-
-# only filter out those who never visited during the initial phase 
-# for the first row, subtract by the length of the initialization phase (100)
-aft.ini.obs <- obs.tslv %>% filter(grid_id > 100) %>% mutate(tslv1 = ifelse(row_number() == 1, grid_id - 100, tslv1))
-
-# rbind the modified initial phase and after observations and make sure to have absolute value  
-final.obs.tslv <- rbind(ini.obs, aft.ini.obs) %>% abs() %>% dplyr::select(-tslv)
-# change the colnames 
-colnames(final.obs.tslv) <- c("observation.id", "timestep.visited", "n.revisitation", "x1_", "y1_", "TSLV")
-final.obs.tslv %>% head()
+bear.sp.tmp.map.sf %>% as.data.frame()
 ```
+
 ### Random Locations 
 
 *[Do the exact same framework as above]*
@@ -247,7 +290,7 @@ fishnet_grid_sf_ran
 ```
 
 To check the result, plot the grid into a interactive thematic map with tmap.
-```{r, ran:grid map}
+```{r, ran:grid map, }
 tmap_mode("view")
 
 map_fishnet_ran = tm_shape(fishnet_grid_sf_ran) +
