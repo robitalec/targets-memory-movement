@@ -1,0 +1,429 @@
+---
+title: "1.amt_conv"
+author: "Dennis Kim"
+date: "2022-10-06"
+output: html_document
+---
+
+# Objective 
+
+To explore the structure of the bear data set. To do this, I will: 
+
+1. Generate used and available locations of the bear through amt framework. 
+2. Extract habitat covariate from habitat layer. 
+3. Create sf polygons that define the buffer of each grid 
+4. Calculate the points that fall within each buffer and save it as each raster layer 
+5. Calculate the TSLV similar to Uli's approach 
+6. Include TSLV values per each location and save them in the column of the data 
+7. Fit SSF model with a TSLV predictor 
+
+## Document Preamble 
+```{r preamble, include = FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(DT)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(amt)
+library(ggplot2)
+library(raster)
+library(sf)
+library(recurse)
+library(scales)
+library(sp)
+library(geosphere)
+library(generics)
+library(sfheaders)
+library(lubridate)
+options(width = 150)
+
+# set knitr options 
+opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
+```
+
+## Tracking data 
+
+Read in the gps data 
+```{r read gps data}
+# Location data of the bear 
+bear <- read.csv(here::here("data", "GF1143_raw.csv"))
+
+# change the time format of the data 
+bear$datetime <- as.POSIXct(bear$datetime, format =  "%Y-%m-%d %H:%M")
+
+# summary of the data
+summary(bear)
+```
+
+Plot the data 
+```{r bear location vis}
+ggplot(bear, aes(x = x, y = y))+ 
+  geom_point()
+```
+
+## Prepare environmental data 
+
+Add environmental covariate (berry)
+```{r habitat layer}
+# call the berries layer
+berry <- raster(here("data/berries/berries.tif"))
+
+# plot the layer
+plot(berry)
+
+# crs of the layer 
+crs(berry)
+```
+
+
+## amt conversion 
+
+Add a track class to the data and summarize the data 
+```{r amt conversion}
+# make tracks 
+trk.bear <- amt::make_track(bear, .x=x, .y=y, .t=datetime, crs=CRS("+init=epsg:26908"))
+
+summary(trk.bear)
+```
+
+Summarize the sampling rates of the bear
+```{r sampling rates}
+# 4 hour sampling seems reasonable - no need to resample - since it is already resampled 
+summarize_sampling_rate(trk.bear) 
+```
+
+change the track point to step 
+1. Resample track and filter bursts 
+2. Convert track to steps 
+3. Create random steps 
+4. Extract covariate values 
+```{r retrk bear, echo = FALSE}
+# follow the above approach 
+ssfdat.bear <- 
+  trk.bear %>% track_resample(rate = hours(4), tolerance = minutes(30)) %>% 
+  steps_by_burst() %>% 
+  random_steps(n_control = 1) %>% 
+  extract_covariates(berry) %>% 
+  filter(!is.na(ta_))
+
+# summary of the ssf data
+summary(ssfdat.bear)
+```
+
+Check the reasonable buffer distance for each step length - I will pick 500m as a buffer distance from the step lengths 
+```{r sl distribution}
+ssfdat.bear %>% filter(case_ == "TRUE") %>% dplyr::select(sl_) %>% summary()
+```
+
+## Time Since Last Visit 
+
+### Create buffer zones of the step lengths
+
+select randomized and used locations of the tracks from the ssfdat.bear
+```{r st points, echo = FALSE}
+# select random locations that matched with observed step lengths 
+obs <- ssfdat.bear %>% filter(case_ == "TRUE")
+obs
+
+ran <- ssfdat.bear %>% filter(case_ == FALSE)
+matched.ran <- subset(ran, x1_ %in% obs$x1_)
+matched.ran
+
+
+# select observed locations
+obs.loc <- obs %>% dplyr::select(x1_, y1_)
+colnames(obs.loc) <- c("x", "y")
+obs.loc.sf <- st_as_sf(obs.loc, coords = c("x", "y"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs")
+obs.loc.sf %>% head()
+
+# select random locations
+ran.loc <- matched.ran %>% dplyr::select(x2_, y2_)
+colnames(ran.loc) <- c("x", "y")
+ran.loc.sf <- st_as_sf(ran.loc, coords = c("x", "y"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs")
+ran.loc.sf %>% head()
+```
+
+create a sf linestring object representing a step length between 2 observed locations within the whole trajectory 
+```{r time since last visit calc, echo = FALSE}
+# select observed locations only    
+obs.step <- obs %>% dplyr::select(x1_,y1_, x2_, y2_)
+colnames(obs.step) <- c("x1", "y1", "x2", "y2")
+head(obs.step)
+
+# make a sf linestring representing each step length
+## functions for making sf linestrings
+make_line <- function(xy2){
+    st_linestring(matrix(xy2, nrow=2, byrow=TRUE))
+}
+
+make_lines <- function(df, names=c("x1","y1","x2","y2")){
+    m = as.matrix(df[,names])
+    lines = apply(m, 1, make_line, simplify=FALSE)
+    st_sfc(lines)
+}
+
+sf_pts_to_lines <- function(df, names=c("x1","y1","x2","y2")){
+    geom = make_lines(df, names)
+    df = st_sf(df, geometry=geom)
+    df
+}
+
+# make linestrings (step length) geometry
+sl_df <- sf_pts_to_lines(obs.step) %>% dplyr::select(geometry)
+
+# set the crs 
+st_crs(sl_df) <- "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs"
+
+head(sl_df)
+
+# plot the SL geometry
+plot(sl_df)
+```
+
+calculate the buffer area with the 500m distance from each focal step length 
+```{r sl intersection, echo = FALSE}
+# create 500 m buffer zone of each step length
+sl.buffer = st_buffer(sl_df, 500)
+
+# plot the sl buffer 
+plot(sl.buffer)
+```
+
+Follow Uli's approach: Their definition of TSLV is short and sweet (see equation 4 in that paper) - basically, it's 0 if the point in question is within some distance δ (this value could be similar to the value you used for your buffer) of the previous point, and otherwise it's (previous TSLV + 1). So they define it iteratively, starting at the first point and iteratively updating TSLV with each time step.
+
+### Observed locations with updated TSLV
+
+Observed points within the step length buffers
+```{r obs: yes within or no, echo = FALSE}
+# check if it is working properly by plotting the first sl buffer with points
+plot(sl.buffer$geometry[1]) # select the buffer of the first step length
+plot(obs.loc.sf$geometry, add = TRUE) # put all the locations to see if some of them are within the location
+
+# identify if any points are within each step length bufferzone 
+obs.within.buffer <- st_contains(sl.buffer, obs.loc.sf)
+# convert to df 
+obs.within.buffer <- obs.within.buffer %>% as.data.frame()
+# change the colnames - the inital df will have 2 columns called row.id and col.id - this represnts row.id as buffer id and col.id as pt id that is counted within the buffer 
+colnames(obs.within.buffer) <- c("buffer.id", "pt.id")
+# check the data
+head(obs.within.buffer)
+```
+Initial prep for the tslv calculation
+```{r obs: tslv prep, echo = FALSE}
+# nest by each unique point 
+nest.obs.pts <- obs.within.buffer %>% nest_by(pt.id)
+
+# last visit time step 
+nest.obs.pts$last.visit.time.step = c(0:533)
+
+# nest by each unique buffer
+nest.obs.buf <- nest.obs.pts  %>% unnest(data) %>% ungroup(pt.id) %>% nest_by(buffer.id)
+
+# current visit time step
+nest.obs.buf$current.time.step = c(1:534)
+
+# unnest the data and call it as comp.buffer
+comp.obs.buffer <- nest.obs.buf %>%  unnest(data) %>% ungroup(buffer.id)
+comp.obs.buffer %>% head()
+```
+
+Create a spatial-temporal cognitive map that track the tslv value per point
+```{r obs: calculate updated tslv, echo = FALSE}
+# group by pt.id and apply the functions we created to account the updated tslv values and nest by pt.id
+obs.tslv <- comp.obs.buffer %>% group_by(pt.id) %>% 
+  mutate(tslv = 
+           ifelse(
+             # if buffer id falls into less 101, then go to case 1 - no? then go to case 2 
+             buffer.id < 101,
+             
+             # case 1: if current time step is equal or greater than the last visit time step by 1, then set it as 0
+             ifelse(current.time.step == last.visit.time.step | current.time.step == (last.visit.time.step+1), 0, 
+             
+             # otherwise, calculate the time between the last visit to the current time step 
+             current.time.step - last.visit.time.step), 
+             
+             # case 2: if current time step is equal or greater than the last visit time step by 1, then set it as 0
+             ifelse(current.time.step == last.visit.time.step | current.time.step == (last.visit.time.step+1), 0, 
+             # otherwise, set the first last visit time step as 100 
+             ifelse(row_number(last.visit.time.step) == 1, 100, 
+             # otherwise, calculate the time between the last visit to the current time step            
+             current.time.step - (last.visit.time.step)
+             ))))%>% 
+  # create an actual updated TSLV by subtracting the earlier tslv value 
+  mutate(updated.tslv = tslv - lag(tslv)) %>%
+  # only select the latest updated tslv value per id
+  slice_tail(n = 1)
+
+# NA values indicate that there is no updated tslv values
+obs.tslv <- obs.tslv %>% mutate(updated.tslv = coalesce(updated.tslv, tslv))
+
+# summary(obs.tslv)
+obs.tslv %>% summary()
+
+obs.tslv
+```
+
+### random locations with updated TSLV
+
+random points within the step length buffers
+```{r random: yes within or no, echo = FALSE}
+# check if it is working properly by plotting the first sl buffer with points
+plot(sl.buffer$geometry[1]) # select the buffer of the first step length
+plot(ran.loc.sf$geometry, add = TRUE) # put all the locations to see if some of them are within the location
+
+# identify if any points are within each step length bufferzone 
+ran.within.buffer <- st_contains(sl.buffer, ran.loc.sf)
+# convert to df 
+ran.within.buffer <- ran.within.buffer %>% as.data.frame()
+# change the colnames - the inital df will have 2 columns called row.id and col.id - this represnts row.id as buffer id and col.id as pt id that is counted within the buffer 
+colnames(ran.within.buffer) <- c("buffer.id", "pt.id")
+# check the data
+head(ran.within.buffer)
+```
+Initial prep for the tslv calculation
+```{r randOm: tslv prep, echo = FALSE}
+# nest by each unique point 
+nest.ran.pts <- ran.within.buffer %>% nest_by(pt.id)
+
+# last visit time step 
+nest.ran.pts <- nest.ran.pts %>% unnest(data) %>% mutate(last.visit.time.step = dplyr::lag(pt.id, n = 1, deafault = NA)) 
+
+# replace na in last.visit.time.step
+nest.ran.pts$last.visit.time.step[which(nest.ran.pts$last.visit.time.step %>% is.na())] <- 0
+
+# nest by each unique buffer
+nest.ran.buf <- nest.ran.pts %>% ungroup(pt.id) %>% nest_by(buffer.id)
+
+# current visit time step (NOTE:: make sure to update this!!! based on how many random steps it generates!)
+nest.ran.buf$current.time.step = c(1:513)
+
+# unnest the data and call it as comp.buffer
+comp.ran.buffer <- nest.ran.buf %>%  unnest(data) %>% ungroup(buffer.id)
+comp.ran.buffer %>% head()
+```
+
+Create a spatial-temporal cognitive map that track the tslv value per point
+```{r random: calculate updated tslv, echo = FALSE}
+# group by pt.id and apply the functions we created to account the updated tslv values and nest by pt.id
+ran.tslv <- comp.ran.buffer %>% group_by(pt.id) %>% 
+  mutate(tslv = 
+           ifelse(
+             # if buffer id falls into less 101, then go to case 1 - no? then go to case 2 
+             buffer.id < 101,
+             
+             # case 1: if current time step is equal or greater than the last visit time step by 1, then set it as 0
+             ifelse(current.time.step == last.visit.time.step | current.time.step == (last.visit.time.step+1), 0, 
+             
+             # otherwise, calculate the time between the last visit to the current time step 
+             last.visit.time.step - current.time.step), 
+             
+             # case 2: if current time step is equal or greater than the last visit time step by 1, then set it as 0
+             ifelse(current.time.step == last.visit.time.step | current.time.step == (last.visit.time.step+1), 0, 
+             # otherwise, set the first last visit time step as 100 
+             ifelse(row_number(last.visit.time.step) == 1, 100, 
+             # otherwise, calculate the time between the last visit to the current time step            
+             last.visit.time.step - current.time.step
+             ))))%>% 
+  # create an actual updated TSLV by subtracting the earlier tslv value 
+  mutate(updated.tslv = tslv - lag(tslv)) %>%
+  # only select the latest updated tslv value per id
+  slice_tail(n = 1)
+
+# NA values indicate that there is no updated tslv values
+ran.tslv <- ran.tslv %>% mutate(updated.tslv = coalesce(updated.tslv, tslv))
+
+# check the data
+summary(ran.tslv)
+```
+
+### Merge the data
+
+Merge the updated tslv information to each observed and random point data
+```{r merge tslv, echo = FALSE}
+# Observed
+
+# create an id column for the points 
+obs.loc.sf <- obs.loc.sf %>% mutate(pt.id = c(1:534))
+
+# only select the applied ids 
+obs.tslv.df <- obs.tslv %>% dplyr::select(pt.id, updated.tslv)
+
+# Random - Apply same below 
+ran.loc.sf <- ran.loc.sf %>% mutate(pt.id = c(1:534))
+
+ran.tslv.df <- ran.tslv %>% dplyr::select(pt.id, updated.tslv)
+```
+
+merge the tslv information to the point data 
+```{r convert sf to df tslv, echo = FALSE}
+# observe 
+obs.df <- left_join(obs.loc.sf, obs.tslv.df)
+
+# random
+ran.df <- left_join(ran.loc.sf, ran.tslv.df)
+
+# convert geometry back to lat and long
+## observed
+obs.df1 <- obs.df %>% mutate(x = unlist(map(obs.df$geometry,1)),
+                   y = unlist(map(obs.df$geometry,2))) %>% dplyr::select(x, y, updated.tslv) %>% st_drop_geometry()
+
+## random
+ran.df1 <- ran.df %>% mutate(x = unlist(map(ran.df$geometry,1)),
+                   y = unlist(map(ran.df$geometry,2))) %>% dplyr::select(x, y, updated.tslv) %>% st_drop_geometry() 
+```
+
+include tslv information to the original data
+```{r amt tslv, echo = FALSE}
+# extract updated tslv values per observed and random locations 
+obs.loc.TSLV <- left_join(obs.loc, obs.df1) %>% mutate(case_ = TRUE)
+colnames(obs.loc.TSLV) <- c("x1_", "y1_", "tslv", "case_")
+obs.loc.TSLV %>% head()
+
+ran.loc.TSLV <- left_join(ran.loc, ran.df1) %>% mutate(case_ = FALSE)
+colnames(ran.loc.TSLV) <- c("x2_", "y2_", "tslv", "case_")
+ran.loc.TSLV %>% head()
+
+# merge the updated TSLV values per observed and random locations in ssf data 
+## first merge the observed locations TSLV
+ssfdat.bear1 <- left_join(ssfdat.bear, obs.loc.TSLV)
+ssfdat.bear1 %>% head()
+
+## second merge with the random locations tslv
+ssfdat.bear2 <- left_join(ssfdat.bear1, ran.loc.TSLV, by = c("x2_", "y2_", "case_"))
+ssfdat.bear2 %>% head()
+
+# unite the tslv columns - replace na to 0 since there is no tslv for the locations
+ssfdat.bear.final <- ssfdat.bear2 %>% mutate(TSLV = coalesce(tslv.x, tslv.y)) %>% replace_na(list(TSLV = 0)) %>% dplyr::select(-c(tslv.x, tslv.y))
+ssfdat.bear.final %>% head()
+
+# save the data 
+#write_rds(ssfdat.bear.final, path = here("data", "ssf_dat.Rdata"))
+```
+
+
+## FitSSF
+```{r fit ssf}
+# only resource predictor 
+ssfdat.bear.final %>% amt::fit_issf(case_ ~ berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+
+# TSLV predictor included
+ssfdat.bear.final %>% amt::fit_issf(case_ ~ berries+ TSLV+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+
+# Interaction between TSLV and berries
+ssfdat.bear.final %>% amt::fit_issf(case_ ~ berries+ TSLV+ TSLV:berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+```
+*Interpretation*
+
+- TSLV: the general idea is that animals may avoid recently used areas. This may be for many reasons - e.g., a predatory animal like a wolf will not hunt in the same patch because the prey animals there will get used to the presence of a predator and hide. Or alternatively, a grazing forager may exhaust all the vegetation in a patch and be forced to move elsewhere to eat. In areas where the animal has not been recently, it's more likely that resources will be "refreshed", making them more attractive to visit. And of course it is spatial (or spatio-temporal) memory that is driving the animal's ability to navigate to these locations. All in all, this is quite similar to what you have suggested but I figured it's good to provide biological background for what the hypotheses behind this model are.
+
+- TSLV:berries: animals move more slowly in areas that they haven't visited in a while where the berries are present (negative interaction)
+
+## Footer
+```{r footer}
+sessionInfo()
+```
