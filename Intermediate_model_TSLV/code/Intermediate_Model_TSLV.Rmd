@@ -11,10 +11,10 @@ To explore the structure of the bear data set. To do this, I will:
 
 1. Generate used and available locations of the bear through amt framework. 
 2. Extract habitat covariate from habitat layer. 
-3. Create a sf polygon per each step length representing a buffer 
-4. Calculate the points that fall within each buffer and count the number of locations that revisited 
-5. Similar to Uli's paper, the locations that are visited to each buffer will count as 0, otherwise +1 
-6. Include TSLV values per each observations throughtout the time and save them in the column of the data 
+3. Create sf polygons that define the buffer of each grid 
+4. Calculate the points that fall within each buffer and save it as each raster layer 
+5. Calculate the TSLV similar to Uli's approach 
+6. Include TSLV values per each location and save them in the column of the data 
 7. Fit SSF model with a TSLV predictor 
 
 ## Document Preamble 
@@ -49,13 +49,16 @@ library(paletteer)
 library(wesanderson)
 library(doBy)
 library(stars)
+library(viridis)
 options(width = 150)
 
 # set knitr options 
 opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
 ```
 
-## Tracking data 
+# Data preparation
+
+## Prepare Tracking data 
 
 Read in the gps data 
 ```{r read gps data}
@@ -90,6 +93,8 @@ crs(berry)
 ```
 
 
+# AMT conversion with habitat predictor 
+
 ## amt conversion 
 
 Add a track class to the data and summarize the data 
@@ -116,7 +121,7 @@ change the track point to step
 ssfdat.bear <- 
   trk.bear %>% track_resample(rate = hours(4), tolerance = minutes(30)) %>% 
   steps_by_burst() %>% 
-  random_steps(n_control = 5) %>% 
+  random_steps(n_control = 3) %>% 
   extract_covariates(berry) %>% 
   filter(!is.na(ta_))
 
@@ -124,14 +129,14 @@ ssfdat.bear <-
 summary(ssfdat.bear)
 ```
 
-Check the reasonable buffer distance for each step length - I will pick 1000m as a buffer distance from the step lengths 
+Check the reasonable buffer distance for each step length - you can adjust this based on the summary of your step lengths 
 ```{r sl distribution}
 ssfdat.bear %>% filter(case_ == "TRUE") %>% dplyr::select(sl_) %>% summary()
 ```
 
-## Create observation points
+# Spatial temporal cognitive map
 
-select randomized and used locations of the tracks from the ssfdat.bear
+select randomized and used locations of the tracks from the ssfdat.bear for making a map
 ```{r st points}
 # select random locations that matched with observed step lengths 
 obs <- ssfdat.bear %>% filter(case_ == TRUE)
@@ -156,10 +161,8 @@ ran.loc %>% head()
 #mapview(ran.loc.sf, cex = 3, alpha = 0.5, popup = NULL)
 ```
 
-## create a temporal spatial cognitive map 
-
 we will first create a grid which the extent equals to the bounding box of the selected points
-```{r grid cells}
+```{r memory map}
 # create 2000m x 2000m grid cell in the map (24 x 20)
 memory.map = st_make_grid(obs.loc.sf, c(2000, 2000), what = "polygons", square = TRUE)
 memory.map
@@ -176,28 +179,37 @@ memory.map.sf %>% plot()
 Follow Uli's approach: Their definition of TSLV is short and sweet (see equation 4 in that paper) - basically, it's 0 if the point in question is within some distance δ (this value could be similar to the value you used for your buffer) of the previous point, and otherwise it's (previous TSLV + 1). So they define it iteratively, starting at the first point and iteratively updating TSLV with each time step.
 
 
+General approaches: 
+1. create a spatial temporal map with the number of cells (for our cases, we use the 2000m x 2000m buffer).
+2. set the burn-in period (365 days - a year) - t index would correlate with the number of observation id 
+3. calculate the tslv based on the year observations - at the end of the calculation, all the NAs would replace by 354 
+4. continue the same approaches 
+5. merge the tslv values to the observed locations 
+
 ### Observed Locations 
 
-Burn-in phase
-```{r}
-# create a burn in list 
-burnin.obs.list <- list()
-burnin.obs.ras.list <- list()
+The entire time periods 
+```{r entire}
+# create all observed pts in list 
+all.obs.list <- list() # save each visited layer 
+all.obs.ras.list <- list() # save each visited raster layer
 
-# for first 100 phase 
-for(i in 1:100){
+# for the entire (t = 534) 
+for(i in 1:534){
 # calculate the animal's visitation to a each grid cell (1 indicates animal visited that particular grid, otherwise 0)  
-burnin.obs.list[[i]] <- memory.map.sf %>% mutate(visit = lengths(st_intersects(memory.map.sf, obs.loc.sf[i,1])))
+all.obs.list[[i]] <- memory.map.sf %>% mutate(visit = lengths(st_intersects(memory.map.sf, obs.loc.sf[i,1])))
 
 # convert to raster
-burnin.obs.ras.list[[i]] <- burnin.obs.list[[i]] %>% raster(ncol= 20, nrow = 24)
+all.obs.ras.list[[i]] <- all.obs.list[[i]] %>% raster(ncol= 20, nrow = 24)
 
 # insert the visited value per each raster map
-values(burnin.obs.ras.list[[i]]) <- burnin.obs.list[[i]]$visit
+values(all.obs.ras.list[[i]]) <- all.obs.list[[i]]$visit
 }
 
-burnin.obs.ras.list[[1]] %>% plot()
+all.obs.ras.list[[1]] %>% plot()
 ```
+
+### calculate the time since last visit
 
 Write function to calculate run length to specified value. If the specified run value (y) is the first value it returns a 0 and if it is missing then a NA is returned.
 ```{r tslv}
@@ -205,205 +217,256 @@ Write function to calculate run length to specified value. If the specified run 
 time.since.last.visit <- function(x, y=1, dir=c("LR", "RL")) {
     if(dir[1] == "RL") x <- rev(x)
     # compute the lengths and values of runs of equal values in a vector -- or the reverse operation
-      x.idx <- rle(x)$values
+      x.idx <- rle(x)$values 
       v.idx <- rle(x)$lengths 
     # if the x is equal to y (1) visited   
     if(x[1] == y) {
       # then equal to 0
       v <- 0
     } else {
+      # calculate the time since the last visit 
       v <- v.idx[which(x.idx == y)-1][1]
     }   
   return( v )
 }
 
-# stack all the raster layers: each layer will have a value of one observation at time t 
-r = raster::brick(burnin.obs.ras.list)
-# calculate tslv 
-(tslv1 <- calc(r, fun=time.since.last.visit))
+## stack all the raster layers: each layer will have a value of one observation at time t 
+allr = raster::brick(all.obs.ras.list)
+## calculate tslv 
+(all.tslv <- calc(allr, fun=time.since.last.visit))
 
-# plot the tslv values 
-tslv1 %>% plot()
-
+## plot the burn-in phase tslv values 
+all.tslv %>% plot()
 
 #Now, apply it to a raster stack example
-memory.map.sf <- memory.map.sf %>% mutate(tslv = values(t2e)) 
-memory.map.sf %>% data.frame()
+obs.memory.map.sf <- memory.map.sf %>% mutate(tslv = values(all.tslv)) 
+
+# only 135 individuals that have tslv values 
+obs.memory.map.sf %>% data.frame() %>% filter(!is.na(tslv))
 ```
 
 
 
 ```{r obs: count grid}
 # count number odfpoints in each grid
-# https://gis.stackexchange.com/questions/323698/counting-points-in-polygons-with-sf-package-of-r
-bear.sp.tmp.map.sf$visit = lengths(st_intersects(bear.sp.tmp.map.sf, obs.loc.sf))
+obs.memory.map.sf$visit = lengths(st_intersects(obs.memory.map.sf, obs.loc.sf))
+obs.memory.map.sf$grid_id <- 1:nrow(obs.memory.map.sf)
+# you can clear see that there are some missing values althought animals definitely have visited the locations - need to deal with the missing locations 
 
-bear.ini.memory.map <- bear.sp.tmp.map.sf %>% mutate(tslv = ifelse(visit == 1, 0, NA)) %>% as.data.frame() %>% mutate(tslv = values(t2e))
-bear.ini.memory.map
+obs.memory.map.sf %>% as.data.frame() 
+#obs.memory.map.sf %>% as.data.frame() %>% mutate(tslv1 = ifelse(is.na(tslv), 365, tslv))
 ```
 
-To check the result, plot the grid into a interactive thematic map with tmap.
+Plot the cognitiv msp over the entire burn in time periods (dark color indicates more tslv values)
 ```{r, obs:grid map}
 tmap_mode("view")
 
-map_fishnet_obs = tm_shape(fishnet_grid_sf_obs) +
+all_map_obs = tm_shape(obs.memory.map.sf) +
   tm_fill(
-    col = "obs_n_colli",
+    col = "tslv",
     palette = "Reds",
     style = "cont",
-    title = "Number of Observed point revisited",
+    title = "Time since last visit",
     id = "grid_id",
     showNA = FALSE,
     alpha = 0.5,
     popup.vars = c(
-      "Number of revisitations: " = "obs_n_colli"
+      "Time Since last visit: " = "tslv"
     ),
     popup.format = list(
-      obs_n_colli = list(format = "f", digits = 0)
+      tslv = list(format = "f", digits = 0)
     )
   ) +
   tm_borders(col = "grey40", lwd = 0.7)
 
-map_fishnet_obs
+all_map_obs
 ```
 
 convert geometry back to lat and long
 ```{r obs:geom to latlong}
-# extract observation locations that fall into the grid
-obs.tslv <- point.in.poly(obs.loc.sf, bear.sp.tmp.map.sf) %>% as.data.frame() 
-obs.tslv
+obs.memory.map.sf %>% as.data.frame() %>% filter(!is.na(tslv))
 
-bear.sp.tmp.map.sf %>% as.data.frame()
+
+# include the number of visits to each cell in the map 
+obs.tslv <- point.in.poly(obs.loc.sf, obs.memory.map.sf) %>% as.data.frame() 
+obs.tslv
 ```
 
-### Random Locations 
+## Random Locations 
 
 *[Do the exact same framework as above]*
-Then count the number of revisitations from observed locations
-```{r ran: count grid}
-# count number of points in each grid
-# https://gis.stackexchange.com/questions/323698/counting-points-in-polygons-with-sf-package-of-r
-fishnet_grid_sf_ran$ran_n_colli = lengths(st_intersects(fishnet_grid_sf_ran, ran.loc.sf))
+```{r entire}
+# create all observed pts in list 
+ran.obs.list <- list() # save each visited layer 
+ran.obs.ras.list <- list() # save each visited raster layer
 
-# remove grid without value of 0 (i.e. no points in side that grid)
-fishnet_grid_sf_ran
+# for the entire  
+for(i in 1:1968){
+# calculate the animal's visitation to a each grid cell (1 indicates animal visited that particular grid, otherwise 0)  
+ran.obs.list[[i]] <- memory.map.sf %>% mutate(visit = lengths(st_intersects(memory.map.sf, ran.loc.sf[i,1])))
+
+# convert to raster
+ran.obs.ras.list[[i]] <- ran.obs.list[[i]] %>% raster(ncol= 20, nrow = 24)
+
+# insert the visited value per each raster map
+values(ran.obs.ras.list[[i]]) <- ran.obs.list[[i]]$visit
+}
+
+ran.obs.ras.list[[5]] %>% plot()
 ```
 
-To check the result, plot the grid into a interactive thematic map with tmap.
-```{r, ran:grid map, }
+### calculate the time since last visit
+
+Write function to calculate run length to specified value. If the specified run value (y) is the first value it returns a 0 and if it is missing then a NA is returned.
+```{r tslv}
+## stack ran the raster layers: each layer will have a value of one observation at time t 
+ranr = raster::brick(ran.obs.ras.list)
+## calculate tslv (apply the same function)
+(ran.tslv <- calc(ranr, fun=time.since.last.visit))
+
+## plot the burn-in phase tslv values 
+ran.tslv %>% plot()
+
+#Now, apply it to a raster stack example
+r.memory.map.sf <- memory.map.sf %>% mutate(tslv = values(ran.tslv)) 
+
+# only 135 individuals that have tslv values 
+r.memory.map.sf %>% data.frame() %>% filter(!is.na(tslv))
+```
+
+```{r ran: count grid}
+# count number of points in each grid
+r.memory.map.sf$visit = lengths(st_intersects(r.memory.map.sf, ran.loc.sf))
+r.memory.map.sf$grid_id <- 1:nrow(r.memory.map.sf)
+# you can clear see that there are some missing values althought animals definitely have visited the locations - need to deal with the missing locations 
+
+memory.map.sf %>% as.data.frame() %>% summary
+#memory.map.sf %>% as.data.frame() %>% mutate(tslv1 = ifelse(is.na(tslv), 365, tslv))
+```
+
+Plot the cognitiv msp over the entire burn in time periods (dark color indicates more tslv values)
+```{r, obs:grid map}
 tmap_mode("view")
 
-map_fishnet_ran = tm_shape(fishnet_grid_sf_ran) +
+r_map_obs = tm_shape(r.memory.map.sf) +
   tm_fill(
-    col = "ran_n_colli",
+    col = "tslv",
     palette = "Reds",
     style = "cont",
-    title = "Number of random point revisited",
+    title = "Time since last visit",
     id = "grid_id",
     showNA = FALSE,
     alpha = 0.5,
     popup.vars = c(
-      "Number of revisitations: " = "ran_n_colli"
+      "Time Since last visit: " = "tslv"
     ),
     popup.format = list(
-      ran_n_colli = list(format = "f", digits = 0)
+      tslv = list(format = "f", digits = 0)
     )
   ) +
   tm_borders(col = "grey40", lwd = 0.7)
 
-map_fishnet_ran
+r_map_obs
 ```
 
 convert geometry back to lat and long
-```{r ran:geom to latlong}
-# extract observation locations that fall into the grid
-ran.tslv <- point.in.poly(ran.loc.sf, fishnet_grid_sf_ran) %>% as.data.frame() %>%
-# create a column called tslv and set 0 for all as a start point
-  mutate(tslv = 0) %>% 
-# calculate the time between the last visit to the location and the beginning of the actual trajectory   
-  mutate(tslv1 = grid_id - lag(grid_id, default = first(grid_id))) 
-
-# only filter out those who visited during the initial phase 
-ini.ran <- ran.tslv %>% filter(grid_id < 100)
-
-# only filter out those who never visited during the initial phase 
-# for the first row, subtract by the length of the initialization phase (100)
-aft.ini.ran <- ran.tslv %>% filter(grid_id > 100) %>% mutate(tslv1 = ifelse(row_number() == 1, grid_id - 100, tslv1))
-
-# rbind the modified initial phase and after ranervations and make sure to have absolute value  
-final.ran.tslv <- rbind(ini.ran, aft.ini.ran) %>% abs() %>% dplyr::select(-tslv)
-# change the colnames 
-colnames(final.ran.tslv) <- c("observation.id", "timestep.visited", "n.revisitation", "x2_", "y2_", "TSLV")
-# you can see there is an NA values in TSLV which means we have missing observations so there are areas that are almost surely used but where tslv does not get updated due to a gap in the data 
-
-# we will be calculating the tslv to minimize this gap 
-final.ran.tslv <- final.ran.tslv %>% 
-  # calculate the time between the last visit to the location and the beginning of the actual trajectory   
-  mutate(tslv1 = replace_na(TSLV, 0)) %>% 
-  mutate(TSLV = timestep.visited - lag(timestep.visited, default = first(timestep.visited))) %>% 
-  dplyr::select(-tslv1) %>% abs()
-
-final.ran.tslv %>% head()
+```{r obs:geom to latlong}
+# include the number of visits to each cell in the map 
+ran.tslv <- point.in.poly(ran.loc.sf, r.memory.map.sf) %>% as.data.frame() 
+# some of rows will have NA values - need to deal with the missing data later 
+ran.tslv
 ```
 
-### Merge the data
+# Further data manipulation
+
+```{r}
+final.obs.tslv <- obs.tslv %>% mutate(case_ = TRUE) %>% dplyr::select(grid_id, tslv, coords.x1, coords.x2, case_)
+colnames(final.obs.tslv) <- c("grid_id","tslv", "x1_", "y1_", "case_")
+final.obs.tslv
+
+final.ran.tslv <- ran.tslv %>% mutate(case_ = FALSE) %>% dplyr::select(grid_id, tslv, coords.x1, coords.x2, case_)
+colnames(final.ran.tslv) <- c("grid_id","tslv", "x2_", "y2_", "case_")
+final.ran.tslv
+```
+
 
 include tslv information to the original data
 ```{r amt tslv}
-# extract updated tslv values per observed and random locations 
-obs.loc.TSLV <- final.obs.tslv %>% mutate(case_ = TRUE) %>% dplyr::select(-c(observation.id, timestep.visited, n.revisitation))
-obs.loc.TSLV %>% head()
-
-ran.loc.TSLV <- final.ran.tslv %>% mutate(case_ = FALSE) %>% dplyr::select(-c(observation.id, timestep.visited, n.revisitation))
-ran.loc.TSLV %>% head()
-
 # select ssfdat filtered by TRUE and extract the tslv values 
 ssfdat.bear.true <- ssfdat.bear %>% filter(case_ == TRUE)
-ssfdat.bear.true1 <- ssfdat.bear.true %>% left_join(., obs.loc.TSLV, by = c("x1_", "y1_", "case_")) 
+ssfdat.bear.true1 <- ssfdat.bear.true %>% left_join(., final.obs.tslv, by = c("x1_", "y1_", "case_")) 
 
 # same for false  
 ssfdat.bear.false <- ssfdat.bear %>% filter(case_ == FALSE)
-ssfdat.bear.false1 <- ssfdat.bear.false %>% left_join(., ran.loc.TSLV, by = c("x2_", "y2_", "case_")) 
+ssfdat.bear.false1 <- ssfdat.bear.false %>% left_join(., final.ran.tslv, by = c("x2_", "y2_", "case_")) 
 
 # as you can tell, there is NA tslv values in available step lengths - this indicates that they are not generated from the observed locations - so we would like to omit them here as well. 
-ssfdat.bear.false1 <- ssfdat.bear.false1 %>% filter(complete.cases(TSLV))
+ssfdat.bear.false1 <- ssfdat.bear.false1 %>% filter(complete.cases(tslv))
 
 # brind all the rows of both used and available locations with tslv information 
 ssfdat.bear.final <- rbind(ssfdat.bear.true1, ssfdat.bear.false1) 
 ssfdat.bear.final %>% summary()
 
-ssfdat.bear.final
+ssfdat.bear.final 
 
 # save the data 
 #write_rds(ssfdat.bear.final, path = here("data", "ssfdat_final_tslv.Rdata"))
 ```
 
+calculate the time between the last visit to this location and the beginning of our actual trajectory
+```{r calculate the actual tslv}
+# create a new dataframe 
+ssfdat.bear.final1 <- ssfdat.bear.final %>% 
+  # create a column that calculates time lag between initial tslv and current tslv so that we set all the points where animals were in within the same grid as 0  
+  mutate(tslv1 = abs(lag(tslv) - tslv)) %>%
+  # the first row will be NA due to the calculation above - set it as 0 
+  mutate(tslv2 = replace_na(tslv1, 0)) %>% 
+  # the initial calculation with the lag will also remove the actual tslv for observations that are not within the same grid cells so bring back to the original tslv values for those that were not visited within the same grid 
+  mutate(tslv3 = ifelse(tslv2 == 0, tslv2, tslv)) %>%
+  # consider every visited locations as 0 as they are considered to be visited previously 
+  mutate(tslv4 = ave(tslv3, FUN = function(a) replace(a, duplicated(a), 0))) %>% 
+  dplyr::select(-c(tslv, tslv1, tslv2, tslv3))
+
+ssfdat.bear.final1
+```
+
+
 TSLV visualization
+[note] the reasonalbe TSLV map should be... 
+* high values: occur in the grid cells that are less visited 
+* low values: occur in the grid cells that are frequently visited
 ```{r TSLV visualization}
 # overall plot - there is a few steps that has really long TSLV values than the others 
-ssfdat.bear.final %>% filter(step_id_ > 100 & case_==1) %>% ggplot(., aes(x = x1_, y = y1_, col = TSLV))+
-  geom_point(size=2)+geom_path() +
-  scale_color_gradient2(low = "yellow", mid = "darkblue", high = "red") +
-  theme_void()
+ssfdat.tslv.vis.dat <- ssfdat.bear.final1 %>% filter(step_id_ > 365 & case_ == TRUE) %>% dplyr::select(x1_, y1_, tslv4) %>% 'colnames<-'(c("x","y", "tslv"))
 
-# zoom-in
-ssfdat.bear.final %>% filter(step_id_ > 100 & case_==1) %>% ggplot(., aes(x = x1_, y = y1_, col = TSLV))+
-  geom_point(size=2)+geom_path() +
-  scale_color_gradient2(low = "yellow", mid = "darkblue", high = "red", limits = c(0, 500)) +
-  theme_void()
+ssfdat.tslv.vis.dat
+
+# visualize the tslv 
+tslv.visualization <-  ggplot()+
+  geom_sf(data = memory.map.sf, fill = "white")+
+  #geom_path(data = ssfdat.tslv.vis.dat, aes(x=x, y=y, col = tslv))+
+  geom_point(data = ssfdat.tslv.vis.dat, aes(x=x, y=y, col = tslv), size =1.5)+
+  scale_color_viridis(option = "viridis")+
+  theme_bw()
+
+
+tslv.visualization
+
+# save the image 
+#ggsave("tslv.plot.png", tslv.visualization, width = 10, height = 5, dpi = 700, bg = NA)
 ```
 
 
 ## FitSSF
 ```{r fit ssf}
 # only resource predictor 
-ssfdat.bear.final %>% slice(101:n()) %>% amt::fit_issf(case_ ~ berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+ssfdat.bear.final1 %>% filter(step_id_ > 365) %>% amt::fit_issf(case_ ~ berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
 
 # TSLV predictor included
-ssfdat.bear.final %>% slice(101:n()) %>% amt::fit_issf(case_ ~ berries+ TSLV+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+ssfdat.bear.final1 %>% filter(step_id_ > 365) %>% amt::fit_issf(case_ ~ berries+ tslv4+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
 
 # Interaction between TSLV and berries
-ssfdat.bear.final %>% slice(101:n()) %>% amt::fit_issf(case_ ~ berries+ TSLV+ TSLV:berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+ssfdat.bear.final1 %>% amt::fit_issf(case_ ~ berries+ tslv4+ tslv4:berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
 ```
 
 ## Footer
