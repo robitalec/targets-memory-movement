@@ -31,6 +31,7 @@ library(tidyr)
 library(purrr)
 library(amt)
 library(ggplot2)
+library(ggnewscale)
 library(raster)
 library(sf)
 library(recurse)
@@ -429,9 +430,6 @@ ssfdat.bear.final <- rbind(ssfdat.bear.true1, ssfdat.bear.false1)
 ssfdat.bear.final %>% summary()
 
 ssfdat.bear.final 
-
-# save the data 
-#write_rds(ssfdat.bear.final, path = here("data", "ssfdat_final_tslv.Rdata"))
 ```
 
 calculate the time between the last visit to this location and the beginning of our actual trajectory
@@ -447,24 +445,22 @@ bear.tslv
 ## observed pts
 bear.obs.pts <- bear.tslv %>% filter(case_ == TRUE) %>% dplyr::select(x1_, y1_, t1_, case_, step_id_, grid_id, tslv) %>% 'colnames<-'(c("x","y", "t", "case", "step_id", "grid_id", "tslv"))
 
+# calculate the time since last visit - NA for the grid that the animal has never visited it before
+setDT(bear.obs.pts)[, tslv := c(NA, diff(t)), by = grid_id]
+
 bear.obs.pts
 
 ## random pts 
 bear.ran.pts <- bear.tslv %>% filter(case_ == FALSE) %>% dplyr::select(x2_, y2_, t2_, case_, step_id_, grid_id, tslv) %>% 'colnames<-'(c("x","y", "t", "case", "step_id", "grid_id", "tslv"))
+
+bear.ran.pts$tslv <- NA
 
 bear.ran.pts
 
 ## rbind the data 
 bear.pts.tslv <- rbind(bear.obs.pts, bear.ran.pts)
 bear.pts.tslv <- bear.pts.tslv[order(bear.pts.tslv$step_id),] # sort by step id 
-bear.pts.tslv <- bear.pts.tslv %>% mutate(t.cov = as.character(t))
-bear.pts.tslv$t.cov <- gsub(" ", "", bear.pts.tslv$t.cov) 
-bear.pts.tslv$t.cov <- gsub("-", "", bear.pts.tslv$t.cov) 
-bear.pts.tslv$t.cov <- gsub(":", "", bear.pts.tslv$t.cov) 
-bear.pts.tslv$t.cov <- gsub('.{4}$', '', bear.pts.tslv$t.cov)
 
-
-setDT(bear.pts.tslv)[, tslv := c(0, diff(as.numeric(t.cov))), by = grid_id]
 bear.pts.tslv
 ```
 
@@ -474,6 +470,9 @@ merge back to the original data
 ssfdat.bear.final <- ssfdat.bear.final[order(ssfdat.bear.final$step_id_),]
 ssfdat.bear.final$tslv <- bear.pts.tslv$tslv
 ssfdat.bear.final 
+
+# save the trk data with the tslv calculated 
+#write_rds(ssfdat.bear.final, path = here("data", "ssfdat_final_tslv.Rdata"))
 ```
 
 TSLV visualization
@@ -492,13 +491,16 @@ tslv.visualization <-  ggplot()+
   #geom_path(data = ssfdat.tslv.vis.dat, aes(x=x, y=y, col = tslv))+
   geom_point(data = ssfdat.tslv.vis.dat, aes(x=x, y=y, col = tslv), size =1.5)+
   scale_color_viridis(option = "viridis")+
+  new_scale_color()+
+  geom_point(data = subset(ssfdat.tslv.vis.dat, is.na(tslv)), aes(x=x, y=y, col = "red"))+
+  scale_color_manual(name = NULL, labels = "NA", values = "red")+
   theme_bw()
 
 
 tslv.visualization
 
 # save the image 
-#ggsave("tslv.plot.png", tslv.visualization, width = 10, height = 5, dpi = 700, bg = NA)
+#ggsave("tslv.plot.png", tslv.visualization, width = 12, height = 7, dpi = 700, bg = NA)
 ```
 
 
