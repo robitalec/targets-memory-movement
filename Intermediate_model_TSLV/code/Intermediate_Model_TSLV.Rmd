@@ -432,8 +432,8 @@ ssfdat.bear.final %>% summary()
 ssfdat.bear.final 
 ```
 
-calculate the time between the last visit to this location and the beginning of our actual trajectory
-```{r calculate the actual tslv}
+calculate the time between the last visit to this location and the beginning of our actual trajectory [First observation points only]
+```{r calculate the actual tslv on observed locations}
 # select the data
 bear.tslv <- ssfdat.bear.final %>% dplyr::select(x1_, y1_, t1_, x2_, y2_, t2_, case_, step_id_,grid_id, tslv)
 # sort by step id 
@@ -457,19 +457,61 @@ bear.ran.pts$tslv <- NA
 
 bear.ran.pts
 
+### calculate the tslv for random points (only based on the used points)
+
 ## rbind the data 
 bear.pts.tslv <- rbind(bear.obs.pts, bear.ran.pts)
 bear.pts.tslv <- bear.pts.tslv[order(bear.pts.tslv$step_id),] # sort by step id 
+colnames(bear.pts.tslv)[7] <- "obs.tslv"
 
 bear.pts.tslv
+```
+
+Calculate the TSLV values for random points based on the observed points 
+```{r calculate the tslv for the random points}
+# copy the current data frame 
+bear.pts.tslv1 <- bear.pts.tslv
+bear.pts.tslv1
+
+# create a random location revisitation only based on the observed locations
+setDT(bear.pts.tslv1)[, ran.loc.tslv.id := ifelse(case != lag(case), diff(t), NA), by = grid_id]
+bear.pts.tslv1
+
+# only filter the non-missing indicator values and calculate the tslv of the random locations based on the observed locations and convert it to unit hours
+bear.pts.tslv1 <- bear.pts.tslv1 %>% filter(!is.na(ran.loc.tslv.id)) %>% mutate(result = t - lag(t)) %>% mutate(result = hour(seconds_to_period(result))) 
+
+# replace 0 to NA since it is indicating of the non visit 
+bear.pts.tslv1$result <- na_if(bear.pts.tslv1$result, 0)
+
+# check the data
+bear.pts.tslv1
+```
+
+join the random location tslv to the observed location tslv data 
+```{r join ran and obs tslv}
+bear.pts.tslv1 <- bear.pts.tslv1 %>% select(x, y, t, step_id, grid_id, result)
+colnames(bear.pts.tslv1)[6] <- "ran.tslv"
+bear.pts.tslv1
+
+bear.pts.tslv2 <- left_join(bear.pts.tslv, bear.pts.tslv1, by = c("x", "y", "t", "step_id", "grid_id"))
+bear.pts.tslv2
+
+bear.pts.tslv3 <- bear.pts.tslv2 %>% mutate(final.tslv = coalesce(obs.tslv, ran.tslv))
+bear.pts.tslv3
+
+# only select the actual final tslv values 
+bear.pts.tslv4 <- bear.pts.tslv3 %>% dplyr::select(-c(obs.tslv, ran.tslv))
+bear.pts.tslv4
 ```
 
 merge back to the original data 
 ```{r merge back}
 # sort by step id 
 ssfdat.bear.final <- ssfdat.bear.final[order(ssfdat.bear.final$step_id_),]
-ssfdat.bear.final$tslv <- bear.pts.tslv$tslv
-ssfdat.bear.final 
+# replace the original data tslv value to the actual tslv values
+ssfdat.bear.final$tslv <- bear.pts.tslv4$final.tslv
+# check the data 
+ssfdat.bear.final %>% select(t1_,t2_,step_id_, case_, grid_id, tslv)
 
 # save the trk data with the tslv calculated 
 #write_rds(ssfdat.bear.final, path = here("data", "ssfdat_final_tslv.Rdata"))
@@ -481,7 +523,7 @@ TSLV visualization
 * low values: occur in the grid cells that are frequently visited
 ```{r TSLV visualization}
 # overall plot - there is a few steps that has really long TSLV values than the others 
-ssfdat.tslv.vis.dat <- bear.pts.tslv %>% filter(step_id > 365 & case == TRUE) %>% dplyr::select(x, y, tslv) %>% 'colnames<-'(c("x","y", "tslv"))
+ssfdat.tslv.vis.dat <- bear.pts.tslv4 %>% filter(step_id > 365 & case == TRUE) %>% dplyr::select(x, y, final.tslv) %>% 'colnames<-'(c("x","y", "tslv"))
 
 ssfdat.tslv.vis.dat
 
