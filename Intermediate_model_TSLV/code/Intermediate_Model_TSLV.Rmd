@@ -118,14 +118,14 @@ summarize_sampling_rate(trk.bear)
 change the track point to step 
 1. Resample track and filter bursts 
 2. Convert track to steps 
-3. Create random steps 
+3. Create random steps (5 random steps)
 4. Extract covariate values 
 ```{r retrk bear}
 # follow the above approach 
 ssfdat.bear <- 
   trk.bear %>% track_resample(rate = hours(4), tolerance = minutes(30)) %>% 
   steps_by_burst() %>% 
-  random_steps(n_control = 3) %>% 
+  random_steps(n_control = 10) %>% 
   extract_covariates(berry) %>% 
   filter(!is.na(ta_))
 
@@ -143,19 +143,19 @@ ssfdat.bear %>% filter(case_ == "TRUE") %>% dplyr::select(sl_) %>% summary()
 select randomized and used locations of the tracks from the ssfdat.bear for making a map
 ```{r st points}
 # select random locations that matched with observed step lengths 
-obs <- ssfdat.bear %>% filter(case_ == TRUE)
-ran <- ssfdat.bear %>% filter(case_ == FALSE)
+obs <- ssfdat.bear %>% filter(case_ == TRUE) # filter the used locations only 
+ran <- ssfdat.bear %>% filter(case_ == FALSE) # filter the random locations only 
 
 # select observed locations
-obs.loc <- obs %>% dplyr::select(x1_, y1_)
-colnames(obs.loc) <- c("x", "y")
-obs.loc.sf <- st_as_sf(obs.loc, coords = c("x", "y"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs")
-obs.loc %>% head()
+obs.loc <- obs %>% dplyr::select(x1_, y1_) # select the coordinates 
+colnames(obs.loc) <- c("x", "y") # change the coordinates names 
+obs.loc.sf <- st_as_sf(obs.loc, coords = c("x", "y"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs") # convert the format to sf object 
+obs.loc %>% head() # check the head of the converted sf data 
 
 ## mapview
 #mapview(obs.loc.sf, cex = 3, alpha = 0.5, popup = NULL)
 
-# select random locations
+# select random locations (apply the same approaches as above)
 ran.loc <- ran %>% dplyr::select(x2_, y2_)
 colnames(ran.loc) <- c("x", "y")
 ran.loc.sf <- st_as_sf(ran.loc, coords = c("x", "y"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs")
@@ -168,12 +168,12 @@ ran.loc %>% head()
 we will first create a grid which the extent equals to the bounding box of the selected points
 ```{r memory map}
 # create an entire locations as sf including random and observed 
-all.loc <- rbind(obs.loc, ran.loc)
-all.loc.sf <- st_as_sf(all.loc, coords = c("x", "y"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs")
+all.loc <- rbind(obs.loc, ran.loc) # rbind the observed and random locations together 
+all.loc.sf <- st_as_sf(all.loc, coords = c("x", "y"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs") # convert to the sf object 
 
 # create 2000m x 2000m grid cell in the map (28 x 25)
 memory.map = st_make_grid(all.loc.sf, c(2000, 2000), what = "polygons", square = TRUE)
-memory.map
+memory.map # check the grid map 
 
 # convert the map to sf object
 memory.map.sf = st_sf(memory.map)
@@ -209,7 +209,7 @@ for(i in 1:nrow(obs.loc.sf)){
 all.obs.list[[i]] <- memory.map.sf %>% mutate(visit = lengths(st_intersects(memory.map.sf, obs.loc.sf[i,1])))
 
 # convert to raster
-all.obs.ras.list[[i]] <- all.obs.list[[i]] %>% raster(ncol= 25, nrow = 28)
+all.obs.ras.list[[i]] <- all.obs.list[[i]] %>% raster(ncol= 26, nrow = 29)
 
 # insert the visited value per each raster map
 values(all.obs.ras.list[[i]]) <- all.obs.list[[i]]$visit
@@ -324,7 +324,7 @@ for(i in 1:nrow(ran.loc.sf)){
 ran.obs.list[[i]] <- memory.map.sf %>% mutate(visit = lengths(st_intersects(memory.map.sf, ran.loc.sf[i,1])))
 
 # convert to raster
-ran.obs.ras.list[[i]] <- ran.obs.list[[i]] %>% raster(ncol= 25, nrow = 28)
+ran.obs.ras.list[[i]] <- ran.obs.list[[i]] %>% raster(ncol= 26, nrow = 29)
 
 # insert the visited value per each raster map
 values(ran.obs.ras.list[[i]]) <- ran.obs.list[[i]]$visit
@@ -474,7 +474,7 @@ bear.pts.tslv1 <- bear.pts.tslv
 bear.pts.tslv1
 
 # create a random location revisitation only based on the observed locations
-setDT(bear.pts.tslv1)[, ran.loc.tslv.id := ifelse(case != lag(case), diff(t), NA), by = grid_id]
+bear.pts.tslv1 <- setDT(bear.pts.tslv1)[, ran.loc.tslv.id := ifelse(case != lag(case), diff(t), NA), by = grid_id]
 bear.pts.tslv1
 
 # only filter the non-missing indicator values and calculate the tslv of the random locations based on the observed locations and convert it to unit hours
@@ -501,7 +501,7 @@ bear.pts.tslv3
 
 # only select the actual final tslv values 
 bear.pts.tslv4 <- bear.pts.tslv3 %>% dplyr::select(-c(obs.tslv, ran.tslv))
-bear.pts.tslv4
+bear.pts.tslv4 %>% filter(!is.na(final.tslv))
 ```
 
 merge back to the original data 
@@ -523,19 +523,20 @@ TSLV visualization
 * low values: occur in the grid cells that are frequently visited
 ```{r TSLV visualization}
 # overall plot - there is a few steps that has really long TSLV values than the others 
-ssfdat.tslv.vis.dat <- bear.pts.tslv4 %>% filter(step_id > 365 & case == TRUE) %>% dplyr::select(x, y, final.tslv) %>% 'colnames<-'(c("x","y", "tslv"))
+ssfdat.tslv.vis.dat <- bear.pts.tslv4 %>% filter(step_id > 365 & case == TRUE & !is.na(final.tslv)) %>% dplyr::select(x, y, final.tslv) %>% 'colnames<-'(c("x","y", "tslv"))
 
 ssfdat.tslv.vis.dat
 
 # visualize the tslv 
-tslv.visualization <-  ggplot()+
+tslv.visualization <-  
+  ggplot()+
   geom_sf(data = memory.map.sf, fill = "white")+
   #geom_path(data = ssfdat.tslv.vis.dat, aes(x=x, y=y, col = tslv))+
   geom_point(data = ssfdat.tslv.vis.dat, aes(x=x, y=y, col = tslv), size =1.5)+
   scale_color_viridis(option = "viridis")+
-  new_scale_color()+
-  geom_point(data = subset(ssfdat.tslv.vis.dat, is.na(tslv)), aes(x=x, y=y, col = "red"))+
-  scale_color_manual(name = NULL, labels = "NA", values = "red")+
+  #new_scale_color()+
+  #geom_point(data = subset(ssfdat.tslv.vis.dat, is.na(tslv)), aes(x=x, y=y, col = "red"))+
+  #scale_color_manual(name = NULL, labels = "NA", values = "red")+
   theme_bw()
 
 
@@ -545,17 +546,17 @@ tslv.visualization
 #ggsave("tslv.plot.png", tslv.visualization, width = 12, height = 7, dpi = 700, bg = NA)
 ```
 
-
 ## FitSSF
+
 ```{r fit ssf}
 # only resource predictor 
-ssfdat.bear.final %>% filter(step_id_ > 365) %>% amt::fit_issf(case_ ~ berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+ssfdat.bear.final %>% filter(step_id_ > 365 & !is.na(tslv)) %>% amt::fit_issf(case_ ~ berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
 
 # TSLV predictor included
-ssfdat.bear.final %>% filter(step_id_ > 365) %>% amt::fit_issf(case_ ~ berries+ tslv+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+ssfdat.bear.final %>% filter(step_id_ > 365 & !is.na(tslv)) %>% amt::fit_issf(case_ ~ berries+ tslv+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
 
 # Interaction between TSLV and berries
-ssfdat.bear.final %>% amt::fit_issf(case_ ~ berries+ tslv+ tslv:berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+ssfdat.bear.final %>% filter(step_id_ > 365 & !is.na(tslv)) %>% amt::fit_issf(case_ ~ berries+ tslv+ tslv:berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
 ```
 
 ## Footer
