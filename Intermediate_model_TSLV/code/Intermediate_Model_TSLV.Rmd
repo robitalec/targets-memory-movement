@@ -51,6 +51,7 @@ library(wesanderson)
 library(doBy)
 library(stars)
 library(viridis)
+library(survival)
 options(width = 150)
 
 # set knitr options 
@@ -171,7 +172,7 @@ we will first create a grid which the extent equals to the bounding box of the s
 all.loc <- rbind(obs.loc, ran.loc) # rbind the observed and random locations together 
 all.loc.sf <- st_as_sf(all.loc, coords = c("x", "y"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs") # convert to the sf object 
 
-# create 2000m x 2000m grid cell in the map (28 x 25)
+# create 2000m x 2000m grid cell in the map 
 memory.map = st_make_grid(all.loc.sf, c(2000, 2000), what = "polygons", square = TRUE)
 memory.map # check the grid map 
 
@@ -474,11 +475,14 @@ bear.pts.tslv1 <- bear.pts.tslv
 bear.pts.tslv1
 
 # create a random location revisitation only based on the observed locations
-bear.pts.tslv1 <- setDT(bear.pts.tslv1)[, ran.loc.tslv.id := ifelse(case != lag(case), diff(t), NA), by = grid_id]
+bear.pts.tslv1 <- setDT(bear.pts.tslv1)[, ran.loc.tslv.id := ifelse(case != lag(case), diff(t), 0), by = grid_id]
 bear.pts.tslv1
 
 # only filter the non-missing indicator values and calculate the tslv of the random locations based on the observed locations and convert it to unit hours
 bear.pts.tslv1 <- bear.pts.tslv1 %>% filter(!is.na(ran.loc.tslv.id)) %>% mutate(result = t - lag(t)) %>% mutate(result = hour(seconds_to_period(result))) 
+
+# For the only random points, replace the 0 tslv values with the first observation per step_id 
+bear.pts.tslv1 <- bear.pts.tslv1 %>% filter(case == FALSE) %>% group_by(step_id, grid_id) %>% mutate(result = ifelse(grid_id == first(grid_id), across(result, first), NA)) %>% ungroup %>% unnest()
 
 # replace 0 to NA since it is indicating of the non visit 
 bear.pts.tslv1$result <- na_if(bear.pts.tslv1$result, 0)
@@ -489,19 +493,24 @@ bear.pts.tslv1
 
 join the random location tslv to the observed location tslv data 
 ```{r join ran and obs tslv}
-bear.pts.tslv1 <- bear.pts.tslv1 %>% select(x, y, t, step_id, grid_id, result)
+# only select the result column which is the true ran tslv values 
+bear.pts.tslv1 <- bear.pts.tslv1 %>% dplyr::select(x, y, t, step_id, grid_id, result)
+# change the column names 
 colnames(bear.pts.tslv1)[6] <- "ran.tslv"
 bear.pts.tslv1
 
+# left join the observed tslv values and random tslv values 
 bear.pts.tslv2 <- left_join(bear.pts.tslv, bear.pts.tslv1, by = c("x", "y", "t", "step_id", "grid_id"))
 bear.pts.tslv2
 
+# coalesce the observed and random values togehter 
 bear.pts.tslv3 <- bear.pts.tslv2 %>% mutate(final.tslv = coalesce(obs.tslv, ran.tslv))
 bear.pts.tslv3
 
 # only select the actual final tslv values 
 bear.pts.tslv4 <- bear.pts.tslv3 %>% dplyr::select(-c(obs.tslv, ran.tslv))
-bear.pts.tslv4 %>% filter(!is.na(final.tslv))
+bear.pts.tslv4 <- bear.pts.tslv4[order(bear.pts.tslv4$step_id),]
+bear.pts.tslv4
 ```
 
 merge back to the original data 
@@ -509,9 +518,13 @@ merge back to the original data
 # sort by step id 
 ssfdat.bear.final <- ssfdat.bear.final[order(ssfdat.bear.final$step_id_),]
 # replace the original data tslv value to the actual tslv values
-ssfdat.bear.final$tslv <- bear.pts.tslv4$final.tslv
+ssfdat.bear.final$tslv <- bear.pts.tslv4$final.tslv 
+
+# slice the data until it reaches to the first observed locations 
+#ssfdat.bear.final <- ssfdat.bear.final  %>% slice(which.max(case_ == TRUE) : n())
+
 # check the data 
-ssfdat.bear.final %>% select(t1_,t2_,step_id_, case_, grid_id, tslv)
+ssfdat.bear.final %>% dplyr::select(t1_,t2_,step_id_, case_, grid_id, tslv)
 
 # save the trk data with the tslv calculated 
 #write_rds(ssfdat.bear.final, path = here("data", "ssfdat_final_tslv.Rdata"))
@@ -523,7 +536,7 @@ TSLV visualization
 * low values: occur in the grid cells that are frequently visited
 ```{r TSLV visualization}
 # overall plot - there is a few steps that has really long TSLV values than the others 
-ssfdat.tslv.vis.dat <- bear.pts.tslv4 %>% filter(step_id > 365 & case == TRUE & !is.na(final.tslv)) %>% dplyr::select(x, y, final.tslv) %>% 'colnames<-'(c("x","y", "tslv"))
+ssfdat.tslv.vis.dat <- bear.pts.tslv4 %>% mutate(year = year(t))  %>% filter(year > "2005" & case == TRUE & !is.na(final.tslv)) %>% dplyr::select(x, y, final.tslv) %>% 'colnames<-'(c("x","y", "tslv"))
 
 ssfdat.tslv.vis.dat
 
@@ -549,14 +562,18 @@ tslv.visualization
 ## FitSSF
 
 ```{r fit ssf}
-# only resource predictor 
-ssfdat.bear.final %>% filter(step_id_ > 365 & !is.na(tslv)) %>% amt::fit_issf(case_ ~ berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+# include the column information year for further filtering 
+ssfdat.bear.final <- ssfdat.bear.final %>% mutate(year = year(t1_)) 
+ssfdat.bear.final %>% summary()
 
-# TSLV predictor included
-ssfdat.bear.final %>% filter(step_id_ > 365 & !is.na(tslv)) %>% amt::fit_issf(case_ ~ berries+ tslv+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+# only resource predictor 
+ssfdat.bear.final %>% filter(year != "2005") %>% amt::fit_clogit(case_ ~ berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+
+# only tslv predictor 
+ssfdat.bear.final %>% filter(year != "2005") %>% amt::fit_clogit(case_ ~ berries+ tslv+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
 
 # Interaction between TSLV and berries
-ssfdat.bear.final %>% filter(step_id_ > 365 & !is.na(tslv)) %>% amt::fit_issf(case_ ~ berries+ tslv+ tslv:berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+ssfdat.bear.final %>% filter(year != "2005" & !is.na(tslv)) %>% amt::fit_clogit(case_ ~ berries+  tslv:berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
 ```
 
 ## Footer
