@@ -566,9 +566,11 @@ tslv.visualization
 ssfdat.bear.final <- ssfdat.bear.final %>% mutate(year = year(t1_)) 
 ssfdat.bear.final %>% summary()
 
-# filtering the burnin phases and replace NA random points TSLV to 365days values (8760 hours), burn-in values
-ssfdat.bear.final1 <- ssfdat.bear.final %>% filter(year != "2005") %>% dplyr::mutate(tslv = replace_na(tslv, 8760)) 
+# filtering the burnin phases and replace NA random points TSLV to current time for the random points subtract the burn-in value: 2005-05-24 00:18:00.00
+ssfdat.bear.final1 <- ssfdat.bear.final %>% filter(year != "2005") %>% dplyr::mutate(tslv = ifelse(is.na(tslv), difftime(t2_,"2005-05-24 00:18:00.00", units = "hours"), tslv))
 ssfdat.bear.final1 %>% summary()
+
+ssfdat.bear.final1
 
 # only berries predictor 
 ssfdat.bear.final1 %>% amt::fit_issf(case_ ~ berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
@@ -579,6 +581,13 @@ ssfdat.bear.final1 %>% amt::fit_clogit(case_ ~ berries+ tslv+ log(sl_)+ cos(ta_)
 # Interaction between TSLV and berries
 ssfdat.bear.final1 %>% amt::fit_issf(case_ ~ berries+ tslv*berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
 ```
+
+save the filtered data
+```{r save the filtered data}
+ssfdat.bear.final1
+write.csv(ssfdat.bear.final1, "ssfdat.bear.final.tslv.csv")
+```
+
 
 ## Footer
 ```{r footer}
