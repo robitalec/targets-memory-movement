@@ -567,13 +567,15 @@ ssfdat.bear.final <- ssfdat.bear.final %>% mutate(year = year(t1_))
 ssfdat.bear.final %>% summary()
 
 # only resource predictor 
-ssfdat.bear.final %>% filter(year != "2005") %>% amt::fit_clogit(case_ ~ berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+ssfdat.bear.final %>% filter(year != "2005") %>% amt::fit_issf(case_ ~ berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
 
 # only tslv predictor 
 ssfdat.bear.final %>% filter(year != "2005") %>% amt::fit_clogit(case_ ~ berries+ tslv+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
 
+survival::coxph()
+
 # Interaction between TSLV and berries
-ssfdat.bear.final %>% filter(year != "2005" & !is.na(tslv)) %>% amt::fit_clogit(case_ ~ berries+  tslv:berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+ssfdat.bear.final %>% filter(year != "2005" & !is.na(tslv)) %>% amt::fit_issf(case_ ~ berries+ tslv*berries+ log(sl_)+ cos(ta_)) %>% summary()
 ```
 
 ## Footer
