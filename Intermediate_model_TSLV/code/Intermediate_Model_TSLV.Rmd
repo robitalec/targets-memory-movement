@@ -442,6 +442,8 @@ bear.tslv <- bear.tslv[order(bear.tslv$step_id_),]
 # check the data 
 bear.tslv
 
+## observed pts
+
 # current data format is step wise - we convert it to the longer format to represent points instead of step 
 ## observed pts
 bear.obs.pts <- bear.tslv %>% filter(case_ == TRUE) %>% dplyr::select(x1_, y1_, t1_, case_, step_id_, grid_id, tslv) %>% 'colnames<-'(c("x","y", "t", "case", "step_id", "grid_id", "tslv"))
@@ -468,7 +470,7 @@ colnames(bear.pts.tslv)[7] <- "obs.tslv"
 bear.pts.tslv
 ```
 
-Calculate the TSLV values for random points based on the observed points 
+Calculate the TSLV values for random points based on the random points 
 ```{r calculate the tslv for the random points}
 # copy the current data frame 
 bear.pts.tslv1 <- bear.pts.tslv
@@ -488,7 +490,7 @@ bear.pts.tslv1 <- bear.pts.tslv1 %>% filter(case == FALSE) %>% group_by(step_id,
 bear.pts.tslv1$result <- na_if(bear.pts.tslv1$result, 0)
 
 # check the data
-bear.pts.tslv1
+bear.pts.tslv1 
 ```
 
 join the random location tslv to the observed location tslv data 
@@ -530,30 +532,39 @@ ssfdat.bear.final %>% dplyr::select(t1_,t2_,step_id_, case_, grid_id, tslv)
 #write_rds(ssfdat.bear.final, path = here("data", "ssfdat_final_tslv.Rdata"))
 ```
 
+filtering the burn-in phases and replace NA random points TSLV to current time for the random points subtract the burn-in value: 2005-05-24 00:18:00.00
+```{r replace the burn-in values}
+# include the column information year for further filtering 
+ssfdat.bear.final <- ssfdat.bear.final %>% mutate(year = year(t1_)) 
+
+# replace NA random points TSLV to current time for the random points subtract the burn-in value: 2005-05-24 00:18:00.00
+ssfdat.bear.final1 <- ssfdat.bear.final  %>% dplyr::mutate(tslv = ifelse(is.na(tslv), difftime(t2_,"2005-05-24 00:18:00.00", units = "hours"), tslv))
+
+# If the random locations are in the same grid cells as the used locations per step id, set the same tslv as the observed locations 
+ssfdat.bear.final1 <- ssfdat.bear.final1 %>% slice(which.max(case_ == "TRUE") : n()) %>% as.data.frame() %>% group_by(step_id_) %>% mutate(tslv = ifelse(first(grid_id) == grid_id, first(tslv), tslv)) %>% ungroup()
+
+ssfdat.bear.final1
+```
+
 TSLV visualization
 [note] the reasonalbe TSLV map should be... 
 * high values: occur in the grid cells that are less visited 
 * low values: occur in the grid cells that are frequently visited
 ```{r TSLV visualization}
 # overall plot - there is a few steps that has really long TSLV values than the others 
-ssfdat.tslv.vis.dat <- bear.pts.tslv4 %>% mutate(year = year(t))  %>% filter(year > "2005" & case == TRUE & !is.na(final.tslv)) %>% dplyr::select(x, y, final.tslv) %>% 'colnames<-'(c("x","y", "tslv"))
-
-ssfdat.tslv.vis.dat
+#ssfdat.tslv.vis.dat <- bear.pts.tslv4 %>% mutate(year = year(t))  %>% filter(year > "2005" & case == TRUE & !is.na(final.tslv)) %>% dplyr::select(x, y, final.tslv) %>% 'colnames<-'(c("x","y", "tslv"))
 
 # visualize the tslv 
-tslv.visualization <-  
-  ggplot()+
-  geom_sf(data = memory.map.sf, fill = "white")+
+#tslv.visualization <-  
+  #ggplot()+
+  #geom_sf(data = memory.map.sf, fill = "white")+
   #geom_path(data = ssfdat.tslv.vis.dat, aes(x=x, y=y, col = tslv))+
-  geom_point(data = ssfdat.tslv.vis.dat, aes(x=x, y=y, col = tslv), size =1.5)+
-  scale_color_viridis(option = "viridis")+
+  #geom_point(data = ssfdat.tslv.vis.dat, aes(x=x, y=y, col = tslv), size =1.5)+
+  #scale_color_viridis(option = "viridis")+
   #new_scale_color()+
   #geom_point(data = subset(ssfdat.tslv.vis.dat, is.na(tslv)), aes(x=x, y=y, col = "red"))+
   #scale_color_manual(name = NULL, labels = "NA", values = "red")+
-  theme_bw()
-
-
-tslv.visualization
+  #theme_bw()
 
 # save the image 
 #ggsave("tslv.plot.png", tslv.visualization, width = 12, height = 7, dpi = 700, bg = NA)
@@ -562,29 +573,18 @@ tslv.visualization
 ## FitSSF
 
 ```{r fit ssf}
-# include the column information year for further filtering 
-ssfdat.bear.final <- ssfdat.bear.final %>% mutate(year = year(t1_)) 
-ssfdat.bear.final %>% summary()
-
-# filtering the burnin phases and replace NA random points TSLV to current time for the random points subtract the burn-in value: 2005-05-24 00:18:00.00
-ssfdat.bear.final1 <- ssfdat.bear.final %>% filter(year != "2005") %>% dplyr::mutate(tslv = ifelse(is.na(tslv), difftime(t2_,"2005-05-24 00:18:00.00", units = "hours"), tslv))
-ssfdat.bear.final1 %>% summary()
-
-ssfdat.bear.final1
-
 # only berries predictor 
-ssfdat.bear.final1 %>% amt::fit_issf(case_ ~ berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+ssfdat.bear.final1 %>% filter(year != 2005) %>% amt::fit_issf(case_ ~ berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
 
 # only tslv predictor 
-ssfdat.bear.final1 %>% amt::fit_clogit(case_ ~ berries+ tslv+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+ssfdat.bear.final1 %>% filter(year != 2005) %>% amt::fit_clogit(case_ ~ berries+ tslv+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
 
 # Interaction between TSLV and berries
-ssfdat.bear.final1 %>% amt::fit_issf(case_ ~ berries+ tslv*berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+ssfdat.bear.final1 %>% filter(year != 2005) %>% amt::fit_issf(case_ ~ berries+ tslv*berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
 ```
 
 save the filtered data
 ```{r save the filtered data}
-ssfdat.bear.final1
 write.csv(ssfdat.bear.final1, "ssfdat.bear.final.tslv.csv")
 ```
 
