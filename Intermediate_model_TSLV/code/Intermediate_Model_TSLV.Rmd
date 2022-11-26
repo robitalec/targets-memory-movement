@@ -171,7 +171,6 @@ we will first create a grid which the extent equals to the bounding box of the s
 # create an entire locations as sf including random and observed 
 all.loc <- rbind(obs.loc, ran.loc) # rbind the observed and random locations together 
 all.loc.sf <- st_as_sf(all.loc, coords = c("x", "y"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs") # convert to the sf object 
-
 # create 2000m x 2000m grid cell in the map 
 memory.map = st_make_grid(all.loc.sf, c(2000, 2000), what = "polygons", square = TRUE)
 memory.map # check the grid map 
@@ -198,7 +197,6 @@ General approaches:
 
 ### Observed Locations 
 
-The entire time periods 
 ```{r entire}
 # create all observed pts in list 
 all.obs.list <- list() # save each visited layer 
@@ -222,7 +220,7 @@ all.obs.ras.list[[1]] %>% plot()
 
 ### calculate the time since last visit
 
-Write function to calculate run length (v.idx) to specified value (y). If the specified run value (y) is the first value it returns a 0 and if it is missing then a NA is returned.
+Write function to calculate run length (v.idx) to specified value (y). If the specified run value (y) is the first value it returns a 0 and if it is missing then a NA is returned. - **current TSLV calculates the number of revisitation per grid** 
 ```{r tslv}
 # tslv function
 ## x: the animal's run value 
@@ -265,10 +263,9 @@ Now we will have tslv based on how many datapoints the animal has been since the
 # count number of points in each grid
 obs.memory.map.sf$visit = lengths(st_intersects(obs.memory.map.sf, obs.loc.sf))
 obs.memory.map.sf$grid_id <- 1:nrow(obs.memory.map.sf)
-# you can clear see that there are some missing values althought animals definitely have visited the locations - need to deal with the missing locations 
+# you can clearly see that there are some missing values although animals definitely have visited the same locations - need to deal with the missing locations 
 
-obs.memory.map.sf %>% as.data.frame() 
-#obs.memory.map.sf %>% as.data.frame() %>% mutate(tslv1 = ifelse(is.na(tslv), 365, tslv))
+obs.memory.map.sf %>% as.data.frame()
 ```
 
 Plot the cognitiv msp over the entire burn in time periods (dark color indicates more tslv values)
@@ -433,6 +430,8 @@ ssfdat.bear.final %>% summary()
 ssfdat.bear.final 
 ```
 
+# Observed locations: calculate TSLV 
+
 calculate the time between the last visit to this location and the beginning of our actual trajectory [First observation points only]
 ```{r calculate the actual tslv on observed locations}
 # select the data
@@ -451,11 +450,15 @@ bear.obs.pts <- bear.tslv %>% filter(case_ == TRUE) %>% dplyr::select(x1_, y1_, 
 # calculate the time since last visit - NA for the grid that the animal has never visited it before
 setDT(bear.obs.pts)[, tslv := c(NA, diff(t)), by = grid_id]
 
+# NAs will be replaced by calculating the difference between the burn-in time - current time of the observed locations
+bear.obs.pts <- bear.obs.pts  %>% dplyr::mutate(tslv = ifelse(is.na(tslv), difftime(t,"2005-05-24 00:18:00.00", units = "hours"), tslv))
+
 bear.obs.pts
 
-## random pts 
+## add empty values for random locations per used location
 bear.ran.pts <- bear.tslv %>% filter(case_ == FALSE) %>% dplyr::select(x2_, y2_, t2_, case_, step_id_, grid_id, tslv) %>% 'colnames<-'(c("x","y", "t", "case", "step_id", "grid_id", "tslv"))
 
+# set all the random point tslv as 0 first
 bear.ran.pts$tslv <- NA
 
 bear.ran.pts
@@ -465,32 +468,98 @@ bear.ran.pts
 ## rbind the data 
 bear.pts.tslv <- rbind(bear.obs.pts, bear.ran.pts)
 bear.pts.tslv <- bear.pts.tslv[order(bear.pts.tslv$step_id),] # sort by step id 
-colnames(bear.pts.tslv)[7] <- "obs.tslv"
+#colnames(bear.pts.tslv)[7] <- "obs.tslv"
 
+# check the data - now the data must have all the observed location tslv values except those ones that animals first time visiting as NA and all the random points tslv values are 0 
 bear.pts.tslv
 ```
 
-Calculate the TSLV values for random points based on the random points 
+# Random locations: calculate TSLV 
+
+Calculate the TSLV values for random points based on the used points 
 ```{r calculate the tslv for the random points}
 # copy the current data frame 
 bear.pts.tslv1 <- bear.pts.tslv
 bear.pts.tslv1
 
-# create a random location revisitation only based on the observed locations
-bear.pts.tslv1 <- setDT(bear.pts.tslv1)[, ran.loc.tslv.id := ifelse(case != lag(case), diff(t), 0), by = grid_id]
-bear.pts.tslv1
+# 1st step: TSLV calculation for random points that are within same grid size as the observed location per step 
 
-# only filter the non-missing indicator values and calculate the tslv of the random locations based on the observed locations and convert it to unit hours
-bear.pts.tslv1 <- bear.pts.tslv1 %>% filter(!is.na(ran.loc.tslv.id)) %>% mutate(result = t - lag(t)) %>% mutate(result = hour(seconds_to_period(result))) 
+# a new dataframe 
+bear.pts.tslv1 <- bear.pts.tslv1 %>% 
+  # slice the data until the first value is the observed location 
+  slice(which.max(case == TRUE) : n()) %>% 
+  # group by step id and grid id 
+  group_by(step_id, grid_id) %>% 
+  # if the grid id for random point is equal to the grid id for true point per each step id, set the tslv for the random points same as the observed location 
+  mutate(tslv1 = ifelse(grid_id == first(grid_id), across(tslv, first), NA)) %>% 
+  # ungroup data
+  ungroup %>% 
+  # unnest data
+  unnest
 
-# For the only random points, replace the 0 tslv values with the first observation per step_id 
-bear.pts.tslv1 <- bear.pts.tslv1 %>% filter(case == FALSE) %>% group_by(step_id, grid_id) %>% mutate(result = ifelse(grid_id == first(grid_id), across(result, first), NA)) %>% ungroup %>% unnest()
+# 2nd step: TSLV calculation for random points that are different grid size than the observed location per step  
 
-# replace 0 to NA since it is indicating of the non visit 
-bear.pts.tslv1$result <- na_if(bear.pts.tslv1$result, 0)
+# convert the logical case value (TRUE/FALSE) to numeric 
+bear.pts.tslv1$case <- as.numeric(bear.pts.tslv1$case)
 
-# check the data
-bear.pts.tslv1 
+# a new dataframe 
+bear.pts.tslv2 <- bear.pts.tslv1 %>% 
+  # filter only the na values in tslv column and/or true case
+  filter(is.na(tslv1) | case == 1) %>%
+  arrange(grid_id, step_id)
+
+bear.pts.tslv2
+
+# remember, there are some random locations that do not contain observed locations per step id - need to remove them for the calculation (they are for the burn-in values)
+# select the grids that only have random locations but not observed 
+no.obs.loc.ran <- bear.pts.tslv2 %>% 
+  group_by(grid_id) %>% 
+  filter(!any(case == "1"))
+
+no.obs.loc.ran
+
+# remove the no.obs.loc.ran data from the original data 
+bear.pts.tslv2 <- bear.pts.tslv2 %>% anti_join(no.obs.loc.ran)
+
+bear.pts.tslv2
+
+# make an index of the latest case 
+last_case_index <- cumsum(bear.pts.tslv2$case) + 1
+
+# shift it by one to the right 
+last_case_index <- c(1, last_case_index[1:length(last_case_index) - 1])
+
+# get the dates of the events and index the vector with the last_event_index, 
+# added an NA as the first date because there was no event
+last_case_date <- c(as.POSIXct(NA), bear.pts.tslv2[which(bear.pts.tslv2$case==1), "t"])[last_case_index]
+
+# substract the event's date with the date of the last event
+bear.pts.tslv2$tae <- difftime(bear.pts.tslv2$t, last_case_date, units= "hours")
+
+# remove all the random points that were generated before the actual observed points exist
+bear.pts.tslv2 <- bear.pts.tslv2 %>% 
+  mutate(tae = ifelse(case == 1, NA, tae)) %>% 
+  group_by(grid_id) %>% 
+  filter(row_number() >= min(which(case == 1))) %>% 
+  ungroup
+
+bear.pts.tslv2
+
+# only select the newly calculated the random point tslv values 
+diff.ran.tslv.vals <- bear.pts.tslv2 %>% 
+  select(x, y, t, case, step_id, grid_id, tae) %>% 
+  filter(!is.na(tae))
+
+# left join those diff random tslv values to the original data to bear.pts.tslv1 to complete the entire calculation
+bear.pts.tslv.final <- left_join(bear.pts.tslv1, diff.ran.tslv.vals, by = c("x", "y", "t", "step_id", "grid_id")) %>% select(-case.y)
+
+bear.pts.tslv.final <- bear.pts.tslv.final %>% 
+  mutate(final.tslv = coalesce(tslv1, tae)) %>% 
+  select(-c(tslv, tslv1, tae)) %>%
+  'colnames<-'(c("x","y", "t", "case", "step_id", "grid_id", "tslv")) %>%
+  mutate(case = as.logical(case))
+
+bear.pts.tslv.final  
 ```
 
 join the random location tslv to the observed location tslv data 
@@ -543,7 +612,7 @@ ssfdat.bear.final1 <- ssfdat.bear.final  %>% dplyr::mutate(tslv = ifelse(is.na(t
 # If the random locations are in the same grid cells as the used locations per step id, set the same tslv as the observed locations 
 ssfdat.bear.final1 <- ssfdat.bear.final1 %>% slice(which.max(case_ == "TRUE") : n()) %>% as.data.frame() %>% group_by(step_id_) %>% mutate(tslv = ifelse(first(grid_id) == grid_id, first(tslv), tslv)) %>% ungroup()
 
-ssfdat.bear.final1
+ssfdat.bear.final1 %>% filter(grid_id == 300)
 ```
 
 TSLV visualization
