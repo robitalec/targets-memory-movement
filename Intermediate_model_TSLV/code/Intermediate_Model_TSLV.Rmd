@@ -553,6 +553,7 @@ diff.ran.tslv.vals <- bear.pts.tslv2 %>%
 # left join those diff random tslv values to the original data to bear.pts.tslv1 to complete the entire calculation
 bear.pts.tslv.final <- left_join(bear.pts.tslv1, diff.ran.tslv.vals, by = c("x", "y", "t", "step_id", "grid_id")) %>% select(-case.y)
 
+# coalesce two columns together as final.tslv and only select the useful columns 
 bear.pts.tslv.final <- bear.pts.tslv.final %>% 
   mutate(final.tslv = coalesce(tslv1, tae)) %>% 
   select(-c(tslv, tslv1, tae)) %>%
@@ -562,81 +563,62 @@ bear.pts.tslv.final <- bear.pts.tslv.final %>%
 bear.pts.tslv.final  
 ```
 
-join the random location tslv to the observed location tslv data 
-```{r join ran and obs tslv}
-# only select the result column which is the true ran tslv values 
-bear.pts.tslv1 <- bear.pts.tslv1 %>% dplyr::select(x, y, t, step_id, grid_id, result)
-# change the column names 
-colnames(bear.pts.tslv1)[6] <- "ran.tslv"
-bear.pts.tslv1
-
-# left join the observed tslv values and random tslv values 
-bear.pts.tslv2 <- left_join(bear.pts.tslv, bear.pts.tslv1, by = c("x", "y", "t", "step_id", "grid_id"))
-bear.pts.tslv2
-
-# coalesce the observed and random values togehter 
-bear.pts.tslv3 <- bear.pts.tslv2 %>% mutate(final.tslv = coalesce(obs.tslv, ran.tslv))
-bear.pts.tslv3
-
-# only select the actual final tslv values 
-bear.pts.tslv4 <- bear.pts.tslv3 %>% dplyr::select(-c(obs.tslv, ran.tslv))
-bear.pts.tslv4 <- bear.pts.tslv4[order(bear.pts.tslv4$step_id),]
-bear.pts.tslv4
-```
+# Finalize the data with merging the calculated observed and random tslv 
 
 merge back to the original data 
 ```{r merge back}
-# sort by step id 
+# original ssf data sort by step id 
 ssfdat.bear.final <- ssfdat.bear.final[order(ssfdat.bear.final$step_id_),]
-# replace the original data tslv value to the actual tslv values
-ssfdat.bear.final$tslv <- bear.pts.tslv4$final.tslv 
 
-# slice the data until it reaches to the first observed locations 
-#ssfdat.bear.final <- ssfdat.bear.final  %>% slice(which.max(case_ == TRUE) : n())
+ssfdat.bear.final
+
+
+# add used location tslv
+
+# only select the observed location tslv and change the col names 
+obs.pts.tslv <-  bear.pts.tslv.final %>% filter(case == TRUE) %>% 'colnames<-' (c("x1_", "y1_", "t1_", "case_", "step_id_", "grid_id", "obs.tslv"))
+obs.pts.tslv
+
+# left join the observed location tslv to the original data 
+ssfdat.bear.final <- left_join(ssfdat.bear.final, obs.pts.tslv, by = c("x1_", "y1_", "t1_", "case_","step_id_", "grid_id"))
+ssfdat.bear.final
+
+# add random location tslv 
+
+# only select the random location tslv and change the col names 
+ran.pts.tslv <- bear.pts.tslv.final %>% filter(case == FALSE) %>% 'colnames<-' (c("x2_", "y2_", "t2_", "case_", "step_id_", "grid_id", "ran.tslv"))
+ran.pts.tslv
+
+# left join the random location tslv to the original data 
+ssfdat.bear.final <- left_join(ssfdat.bear.final, ran.pts.tslv, by = c("x2_", "y2_", "t2_", "case_","step_id_", "grid_id"))
+ssfdat.bear.final
+
+# coalesce the obs and ran tslv columns together and save it as tslv column 
+ssfdat.bear.final <- ssfdat.bear.final %>%  mutate(tslv = coalesce(obs.tslv, ran.tslv)) %>% select(-c("obs.tslv", "ran.tslv"))
+ssfdat.bear.final
 
 # check the data 
 ssfdat.bear.final %>% dplyr::select(t1_,t2_,step_id_, case_, grid_id, tslv)
 
 # save the trk data with the tslv calculated 
 #write_rds(ssfdat.bear.final, path = here("data", "ssfdat_final_tslv.Rdata"))
+#write.csv(ssfdat.bear.final, "ssfdat.bear.final.tslv.csv")
 ```
 
-filtering the burn-in phases and replace NA random points TSLV to current time for the random points subtract the burn-in value: 2005-05-24 00:18:00.00
+# Calculat the burn-in values 
+
+All the NA points are indicating that the animal has never visited the locations before 
+
+filter the burn-in phases and replace NA random points TSLV to current time for the random points subtract the burn-in value: 2005-05-24 00:18:00.00
 ```{r replace the burn-in values}
 # include the column information year for further filtering 
 ssfdat.bear.final <- ssfdat.bear.final %>% mutate(year = year(t1_)) 
+ssfdat.bear.final
 
 # replace NA random points TSLV to current time for the random points subtract the burn-in value: 2005-05-24 00:18:00.00
 ssfdat.bear.final1 <- ssfdat.bear.final  %>% dplyr::mutate(tslv = ifelse(is.na(tslv), difftime(t2_,"2005-05-24 00:18:00.00", units = "hours"), tslv))
 
-# If the random locations are in the same grid cells as the used locations per step id, set the same tslv as the observed locations 
-ssfdat.bear.final1 <- ssfdat.bear.final1 %>% slice(which.max(case_ == "TRUE") : n()) %>% as.data.frame() %>% group_by(step_id_) %>% mutate(tslv = ifelse(first(grid_id) == grid_id, first(tslv), tslv)) %>% ungroup()
-
 ssfdat.bear.final1 %>% filter(grid_id == 300)
-```
-
-TSLV visualization
-[note] the reasonalbe TSLV map should be... 
-* high values: occur in the grid cells that are less visited 
-* low values: occur in the grid cells that are frequently visited
-```{r TSLV visualization}
-# overall plot - there is a few steps that has really long TSLV values than the others 
-#ssfdat.tslv.vis.dat <- bear.pts.tslv4 %>% mutate(year = year(t))  %>% filter(year > "2005" & case == TRUE & !is.na(final.tslv)) %>% dplyr::select(x, y, final.tslv) %>% 'colnames<-'(c("x","y", "tslv"))
-
-# visualize the tslv 
-#tslv.visualization <-  
-  #ggplot()+
-  #geom_sf(data = memory.map.sf, fill = "white")+
-  #geom_path(data = ssfdat.tslv.vis.dat, aes(x=x, y=y, col = tslv))+
-  #geom_point(data = ssfdat.tslv.vis.dat, aes(x=x, y=y, col = tslv), size =1.5)+
-  #scale_color_viridis(option = "viridis")+
-  #new_scale_color()+
-  #geom_point(data = subset(ssfdat.tslv.vis.dat, is.na(tslv)), aes(x=x, y=y, col = "red"))+
-  #scale_color_manual(name = NULL, labels = "NA", values = "red")+
-  #theme_bw()
-
-# save the image 
-#ggsave("tslv.plot.png", tslv.visualization, width = 12, height = 7, dpi = 700, bg = NA)
 ```
 
 ## FitSSF
@@ -646,7 +628,7 @@ TSLV visualization
 ssfdat.bear.final1 %>% filter(year != 2005) %>% amt::fit_issf(case_ ~ berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
 
 # only tslv predictor 
-ssfdat.bear.final1 %>% filter(year != 2005) %>% amt::fit_clogit(case_ ~ berries+ tslv+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+ssfdat.bear.final1 %>% filter(year != 2005) %>% amt::fit_issf(case_ ~ berries+ tslv+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
 
 # Interaction between TSLV and berries
 ssfdat.bear.final1 %>% filter(year != 2005) %>% amt::fit_issf(case_ ~ berries+ tslv*berries+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
@@ -654,7 +636,7 @@ ssfdat.bear.final1 %>% filter(year != 2005) %>% amt::fit_issf(case_ ~ berries+ t
 
 save the filtered data
 ```{r save the filtered data}
-write.csv(ssfdat.bear.final1, "ssfdat.bear.final.tslv.csv")
+#write.csv(ssfdat.bear.final, "ssfdat.bear.final.tslv.csv")
 ```
 
 
