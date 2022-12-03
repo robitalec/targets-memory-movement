@@ -163,11 +163,11 @@ colnames(ran.loc) <- c("x", "y")
 ran.loc.sf <- st_as_sf(ran.loc, coords = c("x", "y"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs")
 ran.loc %>% head()
 
-# : Even if points are not included in the step selection analysis (e.g., because there is a previous data point missing) we must include them in our grid and our subsequent calculation of TSLV, so I have added this extra object that is incorporated into the grid and subsequent steps of the analysis.
+# Even if points are not included in the step selection analysis (e.g., because there is a previous data point missing) we must include them in our grid and our subsequent calculation of TSLV, so I have added this extra object that is incorporated into the grid and subsequent steps of the analysis.
 all.obs.loc <- trk.bear %>% dplyr::select(x_, y_)
 colnames(all.obs.loc) <- c("x", "y")
 
-# : make a spatial points object for the SSF data (use and random points combined). This is important for getting the grid_id for every point from the memory.map.sf grid
+# make a spatial points object for the SSF data (use and random points combined). This is important for getting the grid_id for every point from the memory.map.sf grid
 ssfdat.bear.sf.endpoints <- st_as_sf(ssfdat.bear, coords = c("x2_", "y2_"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs")
 
 ## mapview
@@ -191,7 +191,7 @@ memory.map.sf = st_sf(memory.map)
 memory.map.sf %>% plot()
 memory.map.sf
 
-# : adding grid_id to memory.map.sf so we can get it for all values at the same grid
+# adding grid_id to memory.map.sf so we can get it for all values at the same grid
 memory.map.sf$grid_id = 1:nrow(memory.map.sf)
 ```
 
@@ -249,7 +249,7 @@ ssfdat.bear.final = ssfdat.bear
 ssfdat.bear
 
 
-# : just checking, can comment these out and it won't affect results
+# just checking, can comment these out and it won't affect results
 write.csv(ssfdat.bear, "ssfdat_bear.csv")
 write.csv(trk.bear, "trk_bear.csv")
 ```
