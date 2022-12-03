@@ -195,7 +195,7 @@ memory.map.sf
 memory.map.sf$grid_id = 1:nrow(memory.map.sf)
 ```
 
-: Get grid_id values for the SSF data as well as the original, use-only bear data (which includes some points not included in the step selection analysis but still necessary for accurate TSLV calculation)
+Get grid_id values for the SSF data as well as the original, use-only bear data (which includes some points not included in the step selection analysis but still necessary for accurate TSLV calculation)
 
 ```{r grid id values}
 # get the grid id for ssf data
@@ -217,10 +217,10 @@ Follow Uli's approach: Their definition of TSLV is short and sweet (see equation
 
 General approaches: 
 1. create a spatial temporal map with the number of cells (for our cases, we use the 2000m x 2000m buffer).
-2. set the burn-in period (365 days - a year) - t index would correlate with the number of observation id 
-3. calculate the tslv based on the year observations - at the end of the calculation, all the NAs would replace by 354 
-4. continue the same approaches 
-5. merge the tslv values to the observed locations 
+2. create a function for calculating TSLV based on the observation  
+3. set the burn-in period (a time difference between the initial location time and the current time location) - t index would correlate with the number of observation id 
+4. At the end of the TSLV calculation, all the NAs would replace by 354 
+6. merge the tslv values to the observed locations 
 
 create a TSLV function
 ```{r tslv new}
@@ -240,7 +240,7 @@ tslv.PRT = function(grid_id, time, prev_data) {
 }
 ```
 
-: calculate TSLV for all values in the SSF data frame
+calculate TSLV for all values in the SSF data frame
 ```{r ssf tslv}
 ssfdat.bear$tslv = sapply(X = 1:nrow(ssfdat.bear), FUN = function(row) {
   tslv.PRT(ssfdat.bear$grid_id[row], ssfdat.bear$t2_[row], trk.bear)
