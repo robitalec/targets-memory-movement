@@ -1,0 +1,146 @@
+---
+title: "3.crane_visualization"
+author: "Dennis Kim"
+date: '2022-06-04'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+options(width=165,digits.secs = 3)
+opts_chunk$set(fig.width=7,fig.height=8, error=TRUE,cache = FALSE)
+```
+
+# Load packages 
+```{r packages, message =FALSE, warning = FALSE}
+# data calling & wrangling 
+library(here)
+library(readr)
+library(tidyr)
+library(purrr)
+library(dplyr)
+library(forcats)
+library(tibble)
+library(stringr)
+library(data.table)
+
+# visualization
+library(ggplot2)
+library(jtools)
+library(ggstance)
+library(broom.mixed)
+library(gridExtra)
+library(cowplot)
+```
+
+# Load data 
+
+Call summer crane 5A tracking data
+```{r call summer 5A tracking data}
+# call the data
+summer <- read_rds(here("data","summer_filtered.Rdata")) # 2015-16 centroids data 
+
+# filter out the individual 5A per yr
+summer15_5a <- summer %>% filter(id=="5A") %>% filter(timestamp > "2015-07-15 00:00:00" & timestamp < "2015-09-22 23:59:59")
+summer16_5a <- summer %>% filter(id=="5A") %>% filter(timestamp > "2016-07-15 00:00:00" & timestamp < "2016-09-22 23:59:59")
+summer17_5a <- summer %>% filter(id=="5A") %>% filter(timestamp > "2017-07-15 00:00:00" & timestamp < "2017-09-22 23:59:59")
+summer18_5a <- summer %>% filter(id=="5A") %>% filter(timestamp > "2018-07-15 00:00:00" & timestamp < "2018-09-22 23:59:59")
+summer19_5a <- summer %>% filter(id=="5A") %>% filter(timestamp > "2019-07-15 00:00:00" & timestamp < "2019-09-22 23:59:59")
+summer20_5a <- summer %>% filter(id=="5A") %>% filter(timestamp > "2020-07-15 00:00:00" & timestamp < "2020-09-22 23:59:59")
+
+# row bind them together as one df 
+summer_5A <- rbind(summer15_5a, summer16_5a, summer17_5a, summer18_5a, summer19_5a, summer20_5a)
+
+# facotrize the year column
+summer_5A$year <- as.factor(summer_5A$year)
+
+# check the data 
+summary(summer_5A)
+```
+
+Call SSF fitted estimates data 
+```{r SSF fitted estimates data}
+# call the fitted data 
+fit <- read_rds(here("data", "5A_summer_estimates.Rdata"))
+
+# check 
+summary(fit)
+```
+
+Call used/avail data by year 
+```{r used avail data per yer }
+# call the filltered data 
+used.avail <- read_rds(here("data", "summer_trk15_5A_avil_used_pts.Rdata"))
+
+#check 
+summary(used.avail)
+```
+
+
+# Visualization
+```{r visualization, fig.width= 4, fig.height= 4}
+# ggplot color palette
+colors <- c("2015"= "#661100","2016"="#0072B2" ,"2017"= "#D55E00","2018"= "#CC79A7","2019"="#E69F00", "2020"="#999933")
+
+# a) tracking visualization 
+fig.a = ggplot(data=summer_5A, aes(x=long, y=lat, color = year, alpha = year))+
+  geom_point()+
+  xlab("Longtitude")+
+  ylab("Latitude")+
+  theme(text=element_text(size=12))+
+  scale_colour_manual("Year", values =  colors, labels = c("2015","2016","2017","2018","2019","2020"))+
+  scale_alpha_manual("category", values = c(1, 1, 1, 1, 1, 1), guide = "none")+
+  ggtitle("(a) Crane 5A summer locations")
+
+fig.a
+
+# b) estimate visualization
+fig.b = fit %>% dplyr::mutate(beta = forcats::fct_relevel(beta, sort)) %>% 
+ggplot(., aes(coefficient, beta, color = factor(year))) +
+  geom_vline(xintercept = 0, lty=2, lwd=1, colour = "grey50")+
+  geom_point(size = 3, pch = 20, position = position_dodge(width = 0.5))+
+  geom_linerange(aes(xmax = highCI, xmin = lowCI))+
+  scale_colour_manual("Year", values =  colors, labels = c("2015","2016","2017","2018","2019","2020"))+
+  xlim(-5, 23)+
+  theme_bw()+
+  facet_grid(~ year)+
+  xlab("Effect size")+
+  theme(legend.position = "none", axis.title.y = element_blank())+
+  ggtitle("(b) SSF Parameter estimates")
+
+fig.b
+
+# c) distribution of used/avail points per year 
+fig.c = ggplot(used.avail, aes(x = as.factor(ODprev), group = case_))+
+        geom_bar(position = position_dodge(), aes(y=..count.., fill = case_), stat = "count")+
+        scale_fill_brewer(palette = "Paired")+
+        geom_text(aes(label = ..count..,
+                 y= ..count.. ), stat= "count", vjust = -.3, position=position_dodge(0.9), size = 2.5) +
+        labs(y = "Count", fill = "Used", x = "OD of previous year")+
+        facet_wrap(~year, scales = "free")+
+        ggtitle("(c) Distribution of used and available points in previous year's OD")
+
+fig.c
+```
+
+combine the plots 
+```{r combine the plots}
+# combine the figures 
+grid <- plot_grid(fig.a, fig.b, fig.c, nrow = 3, rel_heights = c(1/2.5, 1/2.5, 1/1.3))
+
+
+#grid <- grid.arrange(fig.a, fig.b, fig.c, nrow = 3, ncol = 1)
+
+grid
+```
+
+save the used landcover plot 
+```{r save the plot}
+ggsave("fig2.png", grid, width = 8, height = 12, dpi = 700, bg = NA)
+```
+
+# Document Footer 
+```{r session info}
+sessionInfo()
+```
