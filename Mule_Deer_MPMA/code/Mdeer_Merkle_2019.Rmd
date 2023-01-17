@@ -273,8 +273,7 @@ m_envir <- ssf1 %>%
 
 summary(m_envir)
 ```
-
-*Interpretation:* This deer select steps that go to more ridgy areas, warmer aspects with higher biomass of herbs
+**Interpretation:** This deer select steps that go to more ridgy areas, warmer aspects with higher biomass of herbs
 
 ## 2) Memory + Environmental model
 ```{r env mem ssf model}
@@ -286,8 +285,7 @@ m_envir_memor <- ssf1 %>%
 
 summary(m_envir_memor)
 ```
-
-*Interpretation:* This deer select steps that go to more ridgy areas, warmer aspects with higher biomass of herbs and they select steps closer to their previous route and in the direction of their previous summer range
+**Interpretation:** This deer select steps that go to more ridgy areas, warmer aspects with higher biomass of herbs and they select steps closer to their previous route and in the direction of their previous summer range
 
 # compare relative empirical support for each model
 ```{r AIC}
