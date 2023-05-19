@@ -1,0 +1,394 @@
+---
+title: "1.amt_conv"
+author: "Dennis Kim"
+date: "2022-10-06"
+output: html_document
+---
+
+# Objective 
+
+To explore the structure of the bear data set. To do this, I will: 
+
+1. Generate used and available locations of the bear through amt framework. 
+2. Extract habitat covariate from habitat layer. 
+3. Create sf polygons that define the buffer of each grid 
+4. Calculate the points that fall within each buffer and save it as each raster layer 
+5. Calculate the TSLV similar to Uli's approach 
+6. Include TSLV values per each location and save them in the column of the data 
+7. Fit SSF model with a TSLV predictor 
+
+## Document Preamble 
+```{r preamble, include = FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(DT)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(amt)
+library(ggplot2)
+library(ggnewscale)
+library(raster)
+library(sf)
+library(recurse)
+library(scales)
+library(sp)
+library(geosphere)
+library(generics)
+library(sfheaders)
+library(lubridate)
+library(pastecs)
+library(stats)
+library(mapview)
+library(tmap)
+library(spatialEco)
+library(paletteer)
+library(wesanderson)
+library(doBy)
+library(stars)
+library(viridis)
+library(forcats)
+options(width = 150)
+
+# set knitr options 
+opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
+
+# set seed 
+#set.seed(5000)
+```
+
+# Data preparation
+
+## Prepare Tracking data 
+
+Read in the gps data 
+```{r read gps data}
+# Location data of the bear 
+bear <- read.csv(here::here("data", "GF1143_raw.csv"))
+
+# change the time format of the data 
+bear$datetime <- as.POSIXct(bear$datetime, format =  "%Y-%m-%d %H:%M")
+
+# summary of the data
+summary(bear)
+```
+
+Plot the data 
+```{r bear location vis}
+ggplot(bear, aes(x = x, y = y))+ 
+  geom_point()
+```
+
+## Prepare environmental data 
+
+Add environmental covariate (berry)
+```{r habitat layer}
+# call the berries layer
+berry <- raster(here("data/berries/berries.tif"))
+
+# plot the layer
+plot(berry)
+
+# crs of the layer 
+crs(berry)
+```
+
+
+# AMT conversion with habitat predictor 
+
+## amt conversion 
+
+Add a track class to the data and summarize the data 
+```{r amt conversion}
+# make tracks 
+trk.bear <- amt::make_track(bear, .x=x, .y=y, .t=datetime, crs=CRS("+init=epsg:26908"))
+
+summary(trk.bear)
+```
+
+Summarize the sampling rates of the bear
+```{r sampling rates}
+# 4 hour sampling seems reasonable - no need to resample - since it is already resampled 
+summarize_sampling_rate(trk.bear) 
+```
+
+change the track point to step 
+1. Resample track and filter bursts 
+2. Convert track to steps 
+3. Create random steps (5 random steps)
+4. Extract covariate values 
+```{r retrk bear}
+# follow the above approach 
+# the filtering needs to come before the simulating random points otherwise there will be random points that do not correspond to a use point in the data
+ssfdat.bear <- 
+  trk.bear %>% track_resample(rate = hours(4), tolerance = minutes(30)) %>% 
+  steps_by_burst() %>% 
+  filter(!is.na(ta_)) %>%
+  random_steps(n_control = 20) %>% 
+  extract_covariates(berry)
+
+# summary of the ssf data
+summary(ssfdat.bear)
+```
+
+Check the reasonable buffer distance for each step length - you can adjust this based on the summary of your step lengths 
+```{r sl distribution}
+ssfdat.bear %>% filter(case_ == "TRUE") %>% dplyr::select(sl_) %>% summary()
+```
+
+# Spatial temporal cognitive map
+
+select randomized and used locations of the tracks from the ssfdat.bear for making a map
+```{r st points}
+# select random locations that matched with observed step lengths 
+obs <- ssfdat.bear %>% filter(case_ == TRUE) # filter the used locations only 
+ran <- ssfdat.bear %>% filter(case_ == FALSE) # filter the random locations only 
+
+# select observed locations
+obs.loc <- obs %>% dplyr::select(x1_, y1_) # select the coordinates 
+colnames(obs.loc) <- c("x", "y") # change the coordinates names 
+obs.loc.sf <- st_as_sf(obs.loc, coords = c("x", "y"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs") # convert the format to sf object 
+obs.loc %>% head() # check the head of the converted sf data 
+
+## mapview
+#mapview(obs.loc.sf, cex = 3, alpha = 0.5, popup = NULL)
+
+# select random locations (apply the same approaches as above)
+ran.loc <- ran %>% dplyr::select(x2_, y2_)
+colnames(ran.loc) <- c("x", "y")
+ran.loc.sf <- st_as_sf(ran.loc, coords = c("x", "y"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs")
+ran.loc %>% head()
+
+# : Even if points are not included in the step selection analysis (e.g., because there is a previous data point missing) we must include them in our grid and our subsequent calculation of TSLV, so I have added this extra object that is incorporated into the grid and subsequent steps of the analysis.
+all.obs.loc <- trk.bear %>% dplyr::select(x_, y_)
+colnames(all.obs.loc) <- c("x", "y")
+
+# : make a spatial points object for the SSF data (use and random points combined). This is important for getting the grid_id for every point from the memory.map.sf grid
+ssfdat.bear.sf.endpoints <- st_as_sf(ssfdat.bear, coords = c("x2_", "y2_"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs")
+
+## mapview
+#mapview(ran.loc.sf, cex = 3, alpha = 0.5, popup = NULL)
+```
+
+we will first create a grid which the extent equals to the bounding box of the selected points
+```{r memory map}
+# create an entire locations as sf including random and observed 
+all.loc <- rbind(obs.loc, ran.loc, all.obs.loc) # rbind the observed and random locations together 
+all.loc.sf <- st_as_sf(all.loc, coords = c("x", "y"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs") # convert to the sf object 
+
+# create 2000m x 2000m grid cell in the map 
+memory.map = st_make_grid(all.loc.sf, c(2000, 2000), what = "polygons", square = TRUE)
+memory.map # check the grid map 
+
+# convert the map to sf object
+memory.map.sf = st_sf(memory.map)
+
+# plot the map
+memory.map.sf %>% plot()
+memory.map.sf
+
+# : adding grid_id to memory.map.sf so we can get it for all values at the same grid
+memory.map.sf$grid_id = 1:nrow(memory.map.sf)
+```
+
+Get grid_id values for the SSF data as well as the original, use-only bear data (which includes some points not included in the step selection analysis but still necessary for accurate TSLV calculation)
+```{r grid id values}
+# get the grid id for ssf data
+ssfdat.grid.id = sf::st_intersection(ssfdat.bear.sf.endpoints, memory.map.sf) %>% as.data.frame
+ssfdat.bear$grid_id = ssfdat.grid.id$grid_id
+ssfdat.bear
+
+# get the grid id for the original, use-only bear data
+all.obs.loc.sf = st_as_sf(trk.bear, coords = c("x_", "y_"), crs = "+proj=utm +zone=8 +datum=NAD83 +units=m +no_defs")
+all.grid.id = sf::st_intersection(all.obs.loc.sf, memory.map.sf) %>% as.data.frame
+trk.bear$grid_id = all.grid.id$grid_id
+trk.bear
+```
+
+## Time Since Last Vitist (TSLV)
+
+Follow Uli's approach: Their definition of TSLV is short and sweet (see equation 4 in their paper) - basically, it's 0 if the point in question is within some distance δ (this value could be similar to the value you used for your buffer) of the previous point, and otherwise it's (previous TSLV + 1). So they define it iteratively, starting at the first point and iteratively updating TSLV with each time step.
+
+
+General approaches: 
+1. create a spatial temporal map with the number of cells (for our cases, we use the 2000m x 2000m buffer).
+2. set the burn-in period (365 days - a year) - t index would correlate with the number of observation id 
+3. calculate the tslv based on the year observations - at the end of the calculation, all the NAs would replace by 354 
+4. continue the same approaches 
+5. merge the tslv values to the observed locations 
+
+create a TSLV function
+```{r tslv new}
+tslv.PRT = function(grid_id, time, prev_data) {
+  # grid_id: an integer representing a grid cell for which TSLV is to be calculated
+  # time: a point in time for which TSLV is to be calculated
+  # prev_data: a data.frame, with columns grid_id and t_. All values of t_ need not be before "time" as this will be filtered inside the function here. This data.frame should only contain points the animal actually visited, even if grid_id represents a random point.
+  
+  # Get all previous points that are recorded at grid_id
+  prev_visits = prev_data[prev_data$grid_id == grid_id & prev_data$t_ < time, ]
+  if (nrow(prev_visits) == 0) return(NA) # for now, keep this at NA. We will fix for the burnin later.
+  
+  last_visit = prev_visits[nrow(prev_visits), ] # get the final row of the data.frame
+  
+  # Returns a numeric value representing the time difference between last_visit and time
+  return(as.numeric(difftime(time, last_visit$t_, units = "hours")))
+}
+```
+
+calculate TSLV for all values in the SSF data frame
+```{r ssf tslv}
+ssfdat.bear$tslv = sapply(X = 1:nrow(ssfdat.bear), FUN = function(row) {
+  tslv.PRT(ssfdat.bear$grid_id[row], ssfdat.bear$t2_[row], trk.bear)
+})
+ssfdat.bear.final = ssfdat.bear
+ssfdat.bear
+
+# : just checking, can comment these out and it won't affect results
+#write.csv(ssfdat.bear, "ssfdat_bear.csv")
+#write.csv(trk.bear, "trk_bear.csv")
+```
+
+filtering the burn-in phases and replace NA random points TSLV to current time for the random points subtract the burn-in value: 2005-05-24 00:18:00.00
+```{r replace the burn-in values}
+# include the column information year for further filtering 
+ssfdat.bear.final <- ssfdat.bear.final %>% mutate(year = year(t1_)) 
+
+# replace NA random points TSLV to current time for the random points subtract the burn-in value: 2005-05-24 00:18:00.00
+ssfdat.bear.final1 <- ssfdat.bear.final  %>% dplyr::mutate(tslv = ifelse(is.na(tslv), difftime(t2_,"2005-05-24 00:18:00.00", units = "hours"), tslv))
+
+# create log(sl) and cos(ta) columns
+ssfdat.bear.final1 <- ssfdat.bear.final1 %>% mutate(log_sl_ = log(sl_),
+                              cos_ta_ = cos(ta_))
+
+# convert the hour unit tslv to day unit
+ssfdat.bear.final1 <- ssfdat.bear.final1 %>% mutate(tslv = tslv/24)
+```
+
+## Visualization
+TSLV visualization
+[note] the reasonalbe TSLV map should be... 
+* high values: occur in the grid cells that are less visited 
+* low values: occur in the grid cells that are frequently visited
+```{r TSLV visualization}
+# overall plot - there is a few steps that has really long TSLV values than the others 
+ssfdat.bear.final1
+
+# visualize the tslv 
+tslv.visualization <-  ggplot()+
+  geom_sf(data = memory.map.sf, fill = "white")+
+  #geom_path(data = ssfdat.bear.final1, aes(x=x1_, y=y1_, col = tslv))+
+  geom_point(data = ssfdat.bear.final1 %>% filter(case_ == TRUE), aes(x=x1_, y=y1_, col = tslv), size =1.5)+
+  scale_color_viridis(option = "viridis")+
+  theme_bw()
+
+tslv.visualization
+
+# save the image 
+#ggsave("tslv.plot.png", tslv.visualization, width = 12, height = 7, dpi = 700, bg = NA)
+```
+
+## FitSSF
+
+```{r fit ssf}
+# only berries predictor 
+ssfdat.bear.final1 %>% filter(t1_ > "2006-05-24 04:18:00.00") %>% amt::fit_issf(case_ ~ berries+ log_sl_+ cos_ta_+ strata(step_id_)) %>% summary()
+
+# with tslv predictor 
+ssfdat.bear.final1 %>% filter(t1_ > "2006-05-24 04:18:00.00") %>% amt::fit_issf(case_ ~ berries + tslv + log_sl_+ cos_ta_ + strata(step_id_)) %>% summary()
+
+# quadratic terms of tslv x berries 
+ssfdat.bear.final1 %>% filter(t1_ > "2006-05-24 04:18:00.00") %>% amt::fit_issf(
+  case_ ~ berries + tslv + I(tslv^2):berries +log_sl_+ cos_ta_ + strata(step_id_)
+) %>% summary()
+```
+
+save the filtered data
+```{r save the filtered data}
+#write.csv(ssfdat.bear.final1, "ssfdat.bear.final.tslv.csv")
+```
+
+## Coefficient Plot 
+
+store coefficents and confidence intervals (CIs) in the restructured data for the visualization. 
+```{r visualization}
+# name the model fit to the df 
+tslv.model <- ssfdat.bear.final1 %>% filter(t1_ > "2006-05-24 04:18:00.00") %>% amt::fit_issf(case_ ~ berries + tslv + I(tslv^3) + log_sl_+ cos_ta_ + strata(step_id_), model = TRUE)
+
+tslv.model
+
+# get the coefficient values
+coef.data <- tslv.model$model$coefficients %>% tidy() %>% 'colnames<-'(c("beta", "coefficient"))
+coef.data
+
+ci.data <- tslv.model$model %>% confint() %>% data.frame() %>% 'colnames<-'(c("CI2.5", "CI97.5")) %>% mutate(beta = coef.data$beta)
+ci.data
+
+model.fit.data <- left_join(coef.data, ci.data)
+model.fit.data
+```
+
+Create a coefficient plot 
+```{r coef plot}
+ggplot(model.fit.data, aes(coefficient, beta, color = factor(beta)))+
+  geom_vline(xintercept = 0, lty=2, lwd=1, colour="grey50")+
+  geom_point(size=3, pch=20, position=position_dodge(width=0.5))+
+  geom_linerange(aes(xmax = CI2.5, xmin = CI97.5))+
+  theme_bw()+
+  xlab("Effect size")+
+  theme(legend.position = "none", axis.title.y = element_blank())+
+  ggtitle("TSLV model: SSF Parameter estimates")
+```
+
+## RSS for movements 
+
+prepare dataframe for calculating RSS. 
+```{r nonlinear RSS}
+# Make a new data.frame for s1 
+s1 <- data.frame(
+    tslv = seq(from = 0, to = 365, length.out = 100),
+    berries = 1.5,
+    sl_ = 1050,
+    log_sl_ = log(1050),
+    cos_ta_ = 1
+)
+
+# data.frame for s2 
+s2 <- data.frame(
+    tslv = 250,
+    berries = 1.5,
+    sl_ = 1050,
+    log_sl_ = log(1050),
+    cos_ta_ = 1
+)
+
+# calculate log-RSS with large-sample confidence intervals 
+lr_m1 <- log_rss(tslv.model, s1, s2)
+
+# check the header of the data.frame
+head(lr_m1)
+
+# plot usinig ggplot2
+RSS.TSLV <- ggplot(lr_m1$df, aes(x = tslv_x1, y = log_rss)) +
+  geom_line(size = 1) +
+  geom_hline(yintercept = 0,
+             linetype = "dashed",
+             color = "gray30") +
+  xlab("Time Since Last Visit (Day)") +
+  ylab("log-RSS vs Mean TSLV") +
+  theme_bw()
+
+RSS.TSLV
+
+# save the plot 
+#ggsave("RSS.TSLV_plot.png", RSS.TSLV, width = 14, height = 9)
+```
+It looks like the bear selects intermediate TSLV and the non-linear effect is estimated. 
+
+## Footer
+```{r footer}
+sessionInfo()
+```
