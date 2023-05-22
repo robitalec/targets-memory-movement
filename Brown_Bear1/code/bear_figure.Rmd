@@ -112,17 +112,13 @@ p1 <- ggplot(lr_m1$df, aes(x = tslv_x1, y = exp(log_rss))) +
   ggtitle("(a) iSSF with a quadratic term of TSLV")
 
 p1
-
-# save the plot 
-ggsave("Bear_figure_conference1.png", p1, width = 4, height = 3)
-#ggsave("RSS.TSLV_plot.png", RSS.TSLV, width = 14, height = 9)
 ```
 
 ## Thompson et al. 2022 model 
 ```{r thompson}
 p2 <- ggplot(data.frame(x = c(0, 365)), aes(x = x), size = 5)+
   stat_function(fun = dnorm, args = list(352.2, 14.5), size = 1)+
-  xlab("Time Since Last Visit (Days)")+
+  xlab("Time Since All The Previously Visited Areas (Days)")+
   ylab("Relative Attractiveness")+
   theme_bw()+
   ggtitle("(b) Thompson et al. 2022")
@@ -141,11 +137,8 @@ cmb_plot <-
 cmb_plot
 
 # save the plot 
-ggsave("Bear_figure_conference.png", cmb_plot, width = 4, height = 4)
-ggsave("Bear_figure.png", cmb_plot, width = 15, height = 7)
+#ggsave("Bear_figure.png", cmb_plot, width = 7, height = 5)
 ```
-
-
 
 ## Footer
 ```{r footer}

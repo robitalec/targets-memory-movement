@@ -97,6 +97,8 @@ change the track point to step
 3. Create random steps (5 random steps)
 4. Extract covariate values 
 ```{r retrk crane}
+set.seed(1)
+
 # follow the above approach 
 # the filtering needs to come before the simulating random points otherwise there will be random points that do not correspond to a use point in the data
 ssfdat.crane <- 
@@ -149,7 +151,7 @@ we will first create a grid which the extent equals to the bounding box of the s
 all.loc <- rbind(obs.loc, ran.loc, all.obs.loc) # rbind the observed and random amt locations and raw observed locations together 
 all.loc.sf <- st_as_sf(all.loc, coords = c("x", "y"), crs = "+init=epsg:5070") # convert to the sf object 
 
-# create 1000m x 1000m grid cell in the map 
+# create 3000m x 300m grid cell in the map 
 memory.map = st_make_grid(all.loc.sf, c(300, 300), what = "polygons", square = TRUE)
 memory.map # check the grid map 
 
@@ -167,14 +169,14 @@ memory.map.sf$grid_id = 1:nrow(memory.map.sf)
 Get grid_id values for the SSF data as well as the original, use-only crane data (which includes some points not included in the step selection analysis but still necessary for accurate TSLV calculation)
 ```{r grid id values}
 # get the grid id for ssf data
-ssfdat.grid.id = point.in.poly(ssfdat.crane.sf.endpoints, memory.map.sf) %>% as.data.frame
+ssfdat.grid.id <-  sf::st_intersection(ssfdat.crane.sf.endpoints, memory.map.sf) %>% as.data.frame
 # create the same grid id columns on the ssf data
-ssfdat.crane$grid_id = ssfdat.grid.id$grid_id
+ssfdat.crane$grid_id <- ssfdat.grid.id$grid_id
 ssfdat.crane
 
 # get the grid id for the original, use-only crane data
 all.obs.loc.sf = st_as_sf(trk.crane, coords = c("x_", "y_"), crs = "+init=epsg:5070")
-all.grid.id = point.in.poly(all.obs.loc.sf, memory.map.sf) %>% as.data.frame
+all.grid.id =  sf::st_intersection(all.obs.loc.sf, memory.map.sf) %>% as.data.frame
 trk.crane$grid_id = all.grid.id$grid_id
 trk.crane
 ```
@@ -238,6 +240,36 @@ colnames(ssfdat.crane.final1)[13] <- "Land_Cover"
 ssfdat.crane.final1
 ```
 
+Now, we've got values but more categories for both NLCD landcover layers and CropScape layers. David made a table in excel of all the nlcd values and then categories that I grouped them in. I have made a table in excel of all the crop values and categories. 
+```{r land cover legend}
+# now add in category names and descriptions 
+nlcd <- read_csv(here("data/NLCD_2016_Land_Cover/nlcd_legend.csv"))
+
+# rename 2nd column to 'nlcd' to make join simpler 
+colnames(nlcd)[2] <- 'nlcd'
+colnames(ssfdat.crane.final1)[13] <- 'nlcd'
+ssfdat.crane.final1
+
+# join the actual nlcd habitat name and also a consolidate category from 20 > 8 levels 
+ssfdat.crane.final2 <- left_join(ssfdat.crane.final1, nlcd[,1:3])
+
+#now there is a column called 'nlcd' with the original nlcd value.
+##column 'name': a word description of the original nlcd value 
+##column 'category': a binned version 
+
+# rename the row name "planted_cultivated" to "cultivated"
+ssfdat.crane.final2$category[ssfdat.crane.final2$category == "planted_cultivated"] <- "cultivated"
+
+# rename the column names of category and name to nlcd specified
+colnames(ssfdat.crane.final2)[21] <- 'nlcd_category'
+
+colnames(ssfdat.crane.final2)[22] <- 'nlcd_name'
+
+# relevel the reference base category 
+ssfdat.crane.final2$category <- fct_relevel(ssfdat.crane.final2$category, "developed")
+```
+
+
 ## TSLV Visualization
 TSLV visualization
 [note] the reasonalbe TSLV map should be... 
@@ -245,13 +277,13 @@ TSLV visualization
 * low values: occur in the grid cells that are frequently visited
 ```{r TSLV visualization}
 # overall plot - there is a few steps that has really long TSLV values than the others 
-ssfdat.crane.final1
+ssfdat.crane.final2
 
 # visualize the tslv 
 tslv.visualization <-  ggplot()+
   geom_sf(data = memory.map.sf, fill = "white")+
-  #geom_path(data = ssfdat.crane.final1, aes(x=x1_, y=y1_, col = tslv))+
-  geom_point(data = ssfdat.crane.final1 %>% filter(case_ == TRUE), aes(x=x1_, y=y1_, col = tslv), size =1.5)+
+  #geom_path(data = ssfdat.crane.final2, aes(x=x1_, y=y1_, col = tslv))+
+  geom_point(data = ssfdat.crane.final2 %>% filter(case_ == TRUE), aes(x=x1_, y=y1_, col = tslv), size =1.5)+
   scale_color_viridis(option = "viridis")+
   theme_bw()
 
@@ -265,21 +297,21 @@ tslv.visualization
 
 ```{r fit ssf}
 # only environmental predictor 
-ssfdat.crane.final1 %>% filter(t1_ > "2016-07-15 05:07:41") %>% amt::fit_issf(case_ ~ Land_Cover+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+ssfdat.crane.final2 %>% filter(t1_ > "2016-07-15 05:07:41") %>% amt::fit_issf(case_ ~ nlcd+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
 
 # only tslv predictor 
-ssfdat.crane.final1 %>% filter(t1_ > "2016-07-15 05:07:41") %>% amt::fit_issf(case_ ~ Land_Cover+ tslv+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+ssfdat.crane.final2 %>% filter(t1_ > "2016-07-15 05:07:41") %>% amt::fit_issf(case_ ~ nlcd+ tslv+ category:tslv+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
 ```
 save the filtered data
 ```{r save the filtered data}
-#write_csv(ssfdat.crane.final1, path = here("data", "ssfdat.crane.final.tslv.csv"))
+#write_csv(ssfdat.crane.final2, path = here("data", "ssfdat.crane.final.tslv.csv"))
 ```
 ## Model fit visualization
 
 store coefficents and confidence intervals (CIs) in the restructured data for the visualization. 
 ```{r visualization}
 # name the model fit to the df 
-tslv.model <- ssfdat.crane.final1 %>% filter(t1_ > "2016-07-15 05:07:41") %>% amt::fit_issf(case_ ~ Land_Cover+ tslv+ log(sl_)+ cos(ta_)+ strata(step_id_))
+tslv.model <- ssfdat.crane.final2 %>% filter(t1_ > "2016-07-15 05:07:41") %>% amt::fit_issf(case_ ~ nlcd+ tslv+ category:tslv+ log(sl_)+ cos(ta_)+ strata(step_id_))
 tslv.model
 
 # get the coefficient values
@@ -296,14 +328,23 @@ model.fit.data
 
 Create a coefficient plot 
 ```{r coef plot}
-ggplot(model.fit.data, aes(coefficient, beta, color = factor(beta)))+
+model.fit.data1 <- model.fit.data %>% filter(., grepl("category", beta))
+model.fit.data1$beta <- c("cultivated", "forest", "herbaceous", "shrubland", "water", "wetlands")
+model.fit.data1
+
+landcover_tslv <- ggplot(model.fit.data1, aes(coefficient, beta, color = factor(beta)))+
   geom_vline(xintercept = 0, lty=2, lwd=1, colour="grey50")+
   geom_point(size=3, pch=20, position=position_dodge(width=0.5))+
   geom_linerange(aes(xmax = CI2.5, xmin = CI97.5))+
   theme_bw()+
-  xlab("Effect size")+
+  xlab("Coefficient Effect size")+
   theme(legend.position = "none", axis.title.y = element_blank())+
-  ggtitle("TSLV model: SSF Parameter estimates")
+  ggtitle("Land Cover Class x TSLV")
+
+landcover_tslv
+
+# save the image 
+ggsave("lc_tslv.plot.png", landcover_tslv, width = 5, height = 3, dpi = 700, bg = NA)
 ```
 
 
