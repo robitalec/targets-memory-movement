@@ -277,20 +277,44 @@ TSLV visualization
 * low values: occur in the grid cells that are frequently visited
 ```{r TSLV visualization}
 # overall plot - there is a few steps that has really long TSLV values than the others 
-ssfdat.crane.final2
+ssfdat.crane.final3 <- ssfdat.crane.final2 %>% mutate(tslv = tslv*0.000694444) %>% mutate(tslv = ifelse(tslv < 0, NA, tslv)) %>% na.omit()
+ssfdat.crane.final3
 
 # visualize the tslv 
 tslv.visualization <-  ggplot()+
   geom_sf(data = memory.map.sf, fill = "white")+
   #geom_path(data = ssfdat.crane.final2, aes(x=x1_, y=y1_, col = tslv))+
-  geom_point(data = ssfdat.crane.final2 %>% filter(case_ == TRUE), aes(x=x1_, y=y1_, col = tslv), size =1.5)+
+  geom_point(data = ssfdat.crane.final3 %>% filter(case_ == TRUE), aes(x=x1_, y=y1_, col = tslv), size =0.5)+
   scale_color_viridis(option = "viridis")+
-  theme_bw()
+  theme(# Hide panel borders and remove grid lines
+  panel.border = element_blank(),
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank())+
+  ggtitle("Across All Years")+
+  facet_wrap(~category)
 
 tslv.visualization
 
 # save the image 
-#ggsave("tslv.plot.png", tslv.visualization, width = 12, height = 7, dpi = 700, bg = NA)
+ggsave("tslv.plot.png", tslv.visualization, width = 12, height = 7, dpi = 700, bg = NA)
+
+# 2020
+tslv.visualization20 <-  ggplot()+
+  geom_sf(data = memory.map.sf, fill = "white")+
+  #geom_path(data = ssfdat.crane.final2, aes(x=x1_, y=y1_, col = tslv))+
+  geom_point(data = ssfdat.crane.final3 %>% filter(case_ == TRUE & year == "2020"), aes(x=x1_, y=y1_, col = tslv), size =0.5)+
+  scale_color_viridis(option = "viridis")+
+  theme(# Hide panel borders and remove grid lines
+  panel.border = element_blank(),
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank())+
+  ggtitle("2020")+
+  facet_wrap(~category)
+
+tslv.visualization20
+
+# save the image 
+ggsave("tslv20.plot.png", tslv.visualization20, width = 12, height = 7, dpi = 700, bg = NA)
 ```
 
 ## FitSSF
@@ -300,7 +324,7 @@ tslv.visualization
 ssfdat.crane.final2 %>% filter(t1_ > "2016-07-15 05:07:41") %>% amt::fit_issf(case_ ~ nlcd+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
 
 # only tslv predictor 
-ssfdat.crane.final2 %>% filter(t1_ > "2016-07-15 05:07:41") %>% amt::fit_issf(case_ ~ nlcd+ tslv+ category:tslv+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
+ssfdat.crane.final3 %>% filter(t1_ > "2016-07-15 05:07:41") %>% amt::fit_issf(case_ ~ nlcd+ tslv+ category:tslv+ log(sl_)+ cos(ta_)+ strata(step_id_)) %>% summary()
 ```
 save the filtered data
 ```{r save the filtered data}
@@ -311,7 +335,7 @@ save the filtered data
 store coefficents and confidence intervals (CIs) in the restructured data for the visualization. 
 ```{r visualization}
 # name the model fit to the df 
-tslv.model <- ssfdat.crane.final2 %>% filter(t1_ > "2016-07-15 05:07:41") %>% amt::fit_issf(case_ ~ nlcd+ tslv+ category:tslv+ log(sl_)+ cos(ta_)+ strata(step_id_))
+tslv.model <- ssfdat.crane.final3 %>% filter(t1_ > "2016-07-15 05:07:41") %>% amt::fit_issf(case_ ~ nlcd+ tslv+ category:tslv+ log(sl_)+ cos(ta_)+ strata(step_id_))
 tslv.model
 
 # get the coefficient values
@@ -344,7 +368,7 @@ landcover_tslv <- ggplot(model.fit.data1, aes(coefficient, beta, color = factor(
 landcover_tslv
 
 # save the image 
-ggsave("lc_tslv.plot.png", landcover_tslv, width = 5, height = 3, dpi = 700, bg = NA)
+#ggsave("lc_tslv.plot.png", landcover_tslv, width = 5, height = 3, dpi = 700, bg = NA)
 ```
 
 
