@@ -301,14 +301,54 @@ ssfdat.bear.final1 %>% filter(t1_ > "2006-05-24 04:18:00.00") %>% amt::fit_issf(
 ssfdat.bear.final1 %>% filter(t1_ > "2006-05-24 04:18:00.00") %>% amt::fit_issf(case_ ~ berries + tslv + log_sl_+ cos_ta_ + strata(step_id_)) %>% summary()
 
 # quadratic terms of tslv x berries 
-ssfdat.bear.final1 %>% filter(t1_ > "2006-05-24 04:18:00.00") %>% amt::fit_issf(
-  case_ ~ berries + tslv + I(tslv^2):berries +log_sl_+ cos_ta_ + strata(step_id_)
-) %>% summary()
+tslv.model <- ssfdat.bear.final1 %>% filter(t1_ > "2006-05-24 04:18:00.00") %>% amt::fit_issf(case_ ~ berries + tslv + I(tslv^2) + log_sl_+ cos_ta_ + strata(step_id_), model = TRUE)
 ```
 
 save the filtered data
 ```{r save the filtered data}
 #write.csv(ssfdat.bear.final1, "ssfdat.bear.final.tslv.csv")
+```
+
+## RSS for movements - SSF model
+
+prepare dataframe for calculating RSS. 
+```{r nonlinear RSS}
+# Make a new data.frame for s1 
+s1 <- data.frame(
+    tslv = seq(from = 0, to = 365, length.out = 100),
+    berries = 1.5,
+    sl_ = 1080,
+    log_sl_ = log(1080),
+    cos_ta_ = 0.001766
+)
+
+# data.frame for s2 
+s2 <- data.frame(
+    tslv =  182.5,
+    berries = 1.5,
+    sl_ = 1080,
+    log_sl_ = log(1080),
+    cos_ta_ = 0.001766
+)
+
+# calculate log-RSS with large-sample confidence intervals 
+lr_m1 <- amt::log_rss(tslv.model, s1, s2)
+
+# check the header of the data.frame
+head(lr_m1)
+
+# plot usinig ggplot2
+p1 <- ggplot(lr_m1$df, aes(x = tslv_x1, y = exp(log_rss))) +
+  geom_line(size = 1) +
+  geom_hline(yintercept = 0,
+             linetype = "dashed",
+             color = "gray30") +
+  xlab("Time Since Last Visit (Days)") +
+  ylab("log-RSS vs Mean TSLV") +
+  theme_bw()+
+  ggtitle("SSA with a quadratic term for TSLV")
+
+p1
 ```
 
 ## Coefficient Plot 
@@ -342,51 +382,6 @@ ggplot(model.fit.data, aes(coefficient, beta, color = factor(beta)))+
   theme(legend.position = "none", axis.title.y = element_blank())+
   ggtitle("TSLV model: SSF Parameter estimates")
 ```
-
-## RSS for movements 
-
-prepare dataframe for calculating RSS. 
-```{r nonlinear RSS}
-# Make a new data.frame for s1 
-s1 <- data.frame(
-    tslv = seq(from = 0, to = 365, length.out = 100),
-    berries = 1.5,
-    sl_ = 1050,
-    log_sl_ = log(1050),
-    cos_ta_ = 1
-)
-
-# data.frame for s2 
-s2 <- data.frame(
-    tslv = 250,
-    berries = 1.5,
-    sl_ = 1050,
-    log_sl_ = log(1050),
-    cos_ta_ = 1
-)
-
-# calculate log-RSS with large-sample confidence intervals 
-lr_m1 <- log_rss(tslv.model, s1, s2)
-
-# check the header of the data.frame
-head(lr_m1)
-
-# plot usinig ggplot2
-RSS.TSLV <- ggplot(lr_m1$df, aes(x = tslv_x1, y = log_rss)) +
-  geom_line(size = 1) +
-  geom_hline(yintercept = 0,
-             linetype = "dashed",
-             color = "gray30") +
-  xlab("Time Since Last Visit (Day)") +
-  ylab("log-RSS vs Mean TSLV") +
-  theme_bw()
-
-RSS.TSLV
-
-# save the plot 
-#ggsave("RSS.TSLV_plot.png", RSS.TSLV, width = 14, height = 9)
-```
-It looks like the bear selects intermediate TSLV and the non-linear effect is estimated. 
 
 ## Footer
 ```{r footer}
