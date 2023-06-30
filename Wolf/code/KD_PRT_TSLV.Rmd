@@ -1,0 +1,438 @@
+---
+title: "1.amt_conv"
+author: "Dennis Kim"
+date: "2022-10-06"
+output: html_document
+---
+
+# Objective 
+
+To explore the structure of the wolf data set. To do this, I will: 
+
+1. Generate used and available locations of the wolf through amt framework. 
+2. Extract habitat covariate from habitat layer. 
+3. Create sf polygons that define the buffer of each grid 
+4. Calculate the points that fall within each buffer and save it as each raster layer 
+5. Calculate the TSLV similar to Uli's approach 
+6. Include TSLV values per each location and save them in the column of the data 
+7. Fit SSF model with a TSLV predictor 
+
+## Document Preamble 
+```{r preamble, include = FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(DT)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(amt)
+library(ggplot2)
+library(ggnewscale)
+library(raster)
+library(sf)
+library(recurse)
+library(scales)
+library(sp)
+library(geosphere)
+library(generics)
+library(sfheaders)
+library(lubridate)
+library(pastecs)
+library(stats)
+library(mapview)
+library(tmap)
+library(spatialEco)
+library(paletteer)
+library(wesanderson)
+library(doBy)
+library(stars)
+library(viridis)
+library(forcats)
+library(splines)
+library(lubridate)
+library(terra)
+options(width = 150)
+
+# set knitr options 
+opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
+
+# set seed 
+set.seed(5000)
+```
+
+# Data preparation
+
+## Prepare Tracking data 
+
+Read in the gps data 
+```{r read gps data}
+# Location data of the wolf 
+wolf <- read.csv(here::here("data", "wolf220.csv"), header=TRUE)
+
+wolf$date <- gsub('/', '-', wolf$date)
+wolf$date <- as.Date(wolf$date, "%m-%d-%Y")
+
+# convert the Actual_Time to PoSIXct format 
+wolf$time <- data.table::as.ITime(wolf$time)
+
+# combine the date and time together as a new column - time 
+wolf$datetime <- as.POSIXct(paste(wolf$date, wolf$time),
+                        format = "%Y-%m-%d %H:%M")
+
+wolf <- wolf %>% dplyr::filter(!is.na(datetime))
+
+wolf %>% summary()
+```
+
+Plot the data 
+```{r wolf location vis}
+ggplot(wolf, aes(x = x, y = y))+ 
+  geom_point()
+```
+
+## Add Distance to edge of homerange countour
+
+load the environmental layers 
+```{r distance to edge}
+# distance to edge
+dst_edge <- raster(here::here("data", "dist_edge.tif"))
+dst_edge
+
+plot(dst_edge)
+```
+
+
+# AMT conversion with habitat predictor 
+
+## amt conversion 
+
+Add a track class to the data and summarize the data 
+```{r amt conversion}
+# make tracks 
+trk.wolf <- amt::make_track(wolf, .x=x, .y=y, .t=datetime, crs=st_crs(4326))
+
+trk.wolf
+```
+
+Summarize the sampling rates of the wolf
+```{r sampling rates}
+# 4 hour sampling seems reasonable - no need to resample - since it is already resampled 
+summarize_sampling_rate(trk.wolf) 
+```
+
+change the track point to step 
+1. Resample track and filter bursts 
+2. Convert track to steps 
+3. Create random steps (5 random steps)
+4. Extract covariate values 
+```{r retrk wolf}
+# follow the above approach 
+# the filtering needs to come before the simulating random points otherwise there will be random points that do not correspond to a use point in the data
+ssfdat.wolf <- 
+  trk.wolf %>% track_resample(rate = hours(2), tolerance = minutes(15)) %>% 
+  steps_by_burst() %>% 
+  filter(!is.na(ta_)) %>%
+  random_steps(n_control = 20) %>% 
+  extract_covariates(dst_edge)
+
+# summary of the ssf data
+summary(ssfdat.wolf)
+```
+
+Check the reasonable buffer distance for each step length - you can adjust this based on the summary of your step lengths 
+```{r sl distribution}
+ssfdat.wolf %>% filter(case_ == "TRUE") %>% dplyr::select(sl_) %>% summary()
+```
+
+# Spatial temporal cognitive map
+
+select randomized and used locations of the tracks from the ssfdat.wolf for making a map
+```{r st points}
+# select random locations that matched with observed step lengths 
+obs <- ssfdat.wolf %>% filter(case_ == TRUE) # filter the used locations only 
+ran <- ssfdat.wolf %>% filter(case_ == FALSE) # filter the random locations only 
+
+# select observed locations
+obs.loc <- obs %>% dplyr::select(x1_, y1_) # select the coordinates 
+colnames(obs.loc) <- c("x", "y") # change the coordinates names 
+obs.loc.sf <- st_as_sf(obs.loc, coords = c("x", "y"), crs = "+proj=utm +datum=NAD83 +units=m +no_defs") # convert the format to sf object 
+obs.loc %>% head() # check the head of the converted sf data 
+
+## mapview
+#mapview(obs.loc.sf, cex = 3, alpha = 0.5, popup = NULL)
+
+# select random locations (apply the same approaches as above)
+ran.loc <- ran %>% dplyr::select(x2_, y2_)
+colnames(ran.loc) <- c("x", "y")
+ran.loc.sf <- st_as_sf(ran.loc, coords = c("x", "y"), crs = "+proj=utm +datum=NAD83 +units=m +no_defs")
+ran.loc %>% head()
+
+# : Even if points are not included in the step selection analysis (e.g., because there is a previous data point missing) we must include them in our grid and our subsequent calculation of TSLV, so I have added this extra object that is incorporated into the grid and subsequent steps of the analysis.
+all.obs.loc <- trk.wolf %>% dplyr::select(x_, y_)
+colnames(all.obs.loc) <- c("x", "y")
+
+# : make a spatial points object for the SSF data (use and random points combined). This is important for getting the grid_id for every point from the memory.map.sf grid
+ssfdat.wolf.sf.endpoints <- st_as_sf(ssfdat.wolf, coords = c("x2_", "y2_"), crs = "+proj=utm +datum=NAD83 +units=m +no_defs")
+
+## mapview
+#mapview(ran.loc.sf, cex = 3, alpha = 0.5, popup = NULL)
+```
+
+we will first create a grid which the extent equals to the bounding box of the selected points
+```{r memory map}
+# create an entire locations as sf including random and observed 
+all.loc <- rbind(obs.loc, ran.loc, all.obs.loc) # rbind the observed and random locations together 
+all.loc.sf <- st_as_sf(all.loc, coords = c("x", "y"), crs = "+proj=utm +datum=NAD83 +units=m +no_defs") # convert to the sf object 
+
+# create 300m x 300m grid cell in the map 
+memory.map = st_make_grid(all.loc.sf, c(300, 300), what = "polygons", square = TRUE)
+memory.map # check the grid map 
+
+# convert the map to sf object
+memory.map.sf = st_sf(memory.map)
+
+# plot the map
+memory.map.sf %>% plot()
+memory.map.sf
+
+# : adding grid_id to memory.map.sf so we can get it for all values at the same grid
+memory.map.sf$grid_id = 1:nrow(memory.map.sf)
+```
+
+Get grid_id values for the SSF data as well as the original, use-only wolf data (which includes some points not included in the step selection analysis but still necessary for accurate TSLV calculation)
+```{r grid id values}
+# get the grid id for ssf data
+ssfdat.grid.id = sf::st_intersection(ssfdat.wolf.sf.endpoints, memory.map.sf) %>% as.data.frame
+ssfdat.wolf$grid_id = ssfdat.grid.id$grid_id
+ssfdat.wolf
+
+# get the grid id for the original, use-only wolf data
+all.obs.loc.sf = st_as_sf(trk.wolf, coords = c("x_", "y_"), crs = "+proj=utm +datum=NAD83 +units=m +no_defs")
+all.grid.id = sf::st_intersection(all.obs.loc.sf, memory.map.sf) %>% as.data.frame
+trk.wolf$grid_id = all.grid.id$grid_id
+trk.wolf
+```
+
+## Time Since Last Vitist (TSLV)
+
+Follow Uli's approach: Their definition of TSLV is short and sweet (see equation 4 in their paper) - basically, it's 0 if the point in question is within some distance δ (this value could be similar to the value you used for your buffer) of the previous point, and otherwise it's (previous TSLV + 1). So they define it iteratively, starting at the first point and iteratively updating TSLV with each time step.
+
+
+General approaches: 
+1. create a spatial temporal map with the number of cells (for our cases, we use the 2000m x 2000m buffer).
+2. set the burn-in period (365 days - a year) - t index would correlate with the number of observation id 
+3. calculate the tslv based on the year observations - at the end of the calculation, all the NAs would replace by 354 
+4. continue the same approaches 
+5. merge the tslv values to the observed locations 
+
+create a TSLV function
+```{r tslv new}
+tslv.PRT = function(grid_id, time, prev_data) {
+  # grid_id: an integer representing a grid cell for which TSLV is to be calculated
+  # time: a point in time for which TSLV is to be calculated
+  # prev_data: a data.frame, with columns grid_id and t_. All values of t_ need not be before "time" as this will be filtered inside the function here. This data.frame should only contain points the animal actually visited, even if grid_id represents a random point.
+  
+  # Get all previous points that are recorded at grid_id
+  prev_visits = prev_data[prev_data$grid_id == grid_id & prev_data$t_ < time, ]
+  if (nrow(prev_visits) == 0) return(NA) # for now, keep this at NA. We will fix for the burnin later.
+  
+  last_visit = prev_visits[nrow(prev_visits), ] # get the final row of the data.frame
+  
+  # Returns a numeric value representing the time difference between last_visit and time
+  return(as.numeric(difftime(time, last_visit$t_, units = "days")))
+}
+```
+
+calculate TSLV for all values in the SSF data frame
+```{r ssf tslv}
+# apply the tslv function
+ssfdat.wolf$tslv = sapply(X = 1:nrow(ssfdat.wolf), FUN = function(row) {
+  tslv.PRT(ssfdat.wolf$grid_id[row], ssfdat.wolf$t2_[row], trk.wolf)
+})
+
+ssfdat.wolf.final = ssfdat.wolf
+ssfdat.wolf %>% summary()
+
+#just checking, can comment these out and it won't affect results
+#write.csv(ssfdat.wolf, "ssfdat_wolf.csv")
+#write.csv(trk.wolf, "trk_wolf.csv")
+```
+
+filtering the burn-in phases and replace NA random points TSLV to current time for the random points subtract the burn-in value: 2004-11-03 20:00:00.00 
+```{r replace the burn-in values}
+# include the column information year for further filtering 
+ssfdat.wolf.final <- ssfdat.wolf.final %>% mutate(year = year(t1_)) 
+
+# TSLV: replace NA random points tslv to current time for the random points subtract the burn-in value: 2004-11-03 20:00:00.00 
+ssfdat.wolf.final1 <- ssfdat.wolf.final %>% dplyr::mutate(TSLV = ifelse(
+  is.na(tslv),
+  difftime(t2_, "2004-11-03 20:00:00.00 ", units = "hours"),
+  tslv
+))
+
+# create log(sl) and cos(ta) columns
+ssfdat.wolf.final1 <- ssfdat.wolf.final1 %>% mutate(log_sl_ = log(sl_),
+                              cos_ta_ = cos(ta_))
+
+# convert the hour unit tslv to day unit
+ssfdat.wolf.final1 <- ssfdat.wolf.final1 %>% mutate(TSLV = TSLV/24)
+
+ssfdat.wolf.final1 %>% summary()
+```
+
+## Visualization
+TSLV visualization
+[note] the reasonalbe TSLV map should be... 
+* high values: occur in the grid cells that are less visited 
+* low values: occur in the grid cells that are frequently visited
+```{r TSLV visualization}
+# overall plot - there is a few steps that has really long TSLV values than the others 
+ssfdat.wolf.final1
+
+# visualize the tslv 
+tslv.visualization <-  ggplot()+
+  geom_sf(data = memory.map.sf, fill = "white")+
+  #geom_path(data = ssfdat.wolf.final1, aes(x=x1_, y=y1_, col = tslv))+
+  geom_point(data = ssfdat.wolf.final1 %>% filter(case_ == TRUE), aes(x=x1_, y=y1_, col = TSLV), size =1.5)+
+  scale_color_viridis(option = "viridis")+
+  theme_bw()
+
+tslv.visualization
+
+# save the image 
+#ggsave("tslv.plot.png", tslv.visualization, width = 12, height = 7, dpi = 700, bg = NA)
+```
+
+## FitSSF
+
+Another option: 
+1. Calculate the distance in time between the current location and all locations in the previous year.
+2. Determine the observation in the previous year that was closest in time to the current observation (e.g., if June 6 2023, look for the observation closet to June 6, 2022)
+3. Store the (x,y) for the location from last year that was closest in time.
+4. For all random and available points, calculate their Euclidean distance to the (x,y) location from step 3.
+
+```{r fit ssf}
+# linear term 
+tslv.model1 <- ssfdat.wolf.final1 %>% filter(t1_ >"2004-12-03 22:01:00.0") %>%  amt::fit_issf(case_ ~ dist_edge+ TSLV + dist_edge:TSLV  + log_sl_+ cos_ta_ + strata(step_id_), model = TRUE)
+
+tslv.model1$model %>% summary()
+
+# quadratic terms 
+tslv.model2 <- ssfdat.wolf.final1 %>% filter(t1_ >"2004-12-03 22:01:00.0") %>% amt::fit_issf(case_ ~ dist_edge + I(TSLV^2) + dist_edge:I(TSLV^2)+ log_sl_+ cos_ta_ + strata(step_id_), model = TRUE)
+
+tslv.model2$model %>% summary()
+```
+
+save the filtered data
+```{r save the filtered data}
+#write.csv(ssfdat.wolf.final1, "ssfdat.wolf.final.tslv.csv")
+```
+
+## RSS for movements - SSF model
+
+prepare dataframe for calculating RSS. 
+```{r nonlinear RSS}
+ggplot(ssfdat.wolf.final1 %>% filter(t1_ >"2004-12-03 22:01:00.0"), aes(x=TSLV, colour = case_))+
+  geom_density()+
+  scale_x_log10()
+
+# Make a new data.frame for s1 
+s1 <- data.frame(
+    TSLV = seq(from = 0, to = 200, length.out = 100),
+    dist_edge = 1025,
+    sl_ = 1000,
+    log_sl_ = log(1000),
+    cos_ta_ = 1
+)
+
+# data.frame for s2 
+s2 <- data.frame(
+    TSLV =  60,
+    dist_edge = 1025,
+    sl_ = 1000,
+    log_sl_ = log(1000),
+    cos_ta_ = 1
+)
+
+# calculate log-RSS with large-sample confidence intervals 
+lr_m1 <- amt::log_rss(tslv.model1, s1, s2)
+lr_m2 <- amt::log_rss(tslv.model2, s1, s2)
+
+# check the header of the data.frame
+head(lr_m1)
+head(lr_m2)
+
+ssfdat.wolf.final2 <- ssfdat.wolf.final1 %>% rename(., TSLV_x1 = TSLV)
+ssfdat.wolf.final2$log_rss <- 1
+
+# plot usinig ggplot2
+p1 <- ggplot(lr_m1$df, aes(x = TSLV_x1, y = log_rss)) +
+  geom_line(size = 1) +
+  geom_hline(yintercept = 0,
+             linetype = "dashed",
+             color = "gray30") +
+  #geom_rug(sides = "b", data = ssfdat.wolf.final2 %>% filter(usedever == 1))+
+  xlab("Time Since Last Visit (Days)") +
+  ylab("log RSS vs Mean TSLV") +
+  theme_bw()+
+  ggtitle("SSA with TSLV")
+
+p1
+
+# save the plot 
+ggsave("wolf_figure1.png", p1, width = 5, height = 3)
+
+p2 <- ggplot(lr_m2$df, aes(x = TSLV_x1, y = log_rss)) +
+  geom_line(size = 1) +
+  geom_hline(yintercept = 0,
+             linetype = "dashed",
+             color = "gray30") +
+  #geom_rug(sides = "b", data = ssfdat.wolf.final2 %>% filter(usedever == 1))+
+  xlab("Time Since Last Visit (Days)") +
+  ylab("log RSS vs Mean TSLV") +
+  theme_bw()+
+  ggtitle("SSA with TSLV")
+
+p2
+
+# save the plot 
+ggsave("wolf_figure2.png", p2, width = 5, height = 3)
+```
+
+## Coefficient Plot 
+
+store coefficents and confidence intervals (CIs) in the restructured data for the visualization. 
+```{r visualization}
+tslv.model1
+
+# get the coefficient values
+coef.data <- tslv.model$model$coefficients %>% tidy() %>% 'colnames<-'(c("beta", "coefficient"))
+coef.data
+
+ci.data <- tslv.model$model %>% confint() %>% data.frame() %>% 'colnames<-'(c("CI2.5", "CI97.5")) %>% mutate(beta = coef.data$beta)
+ci.data
+
+model.fit.data <- left_join(coef.data, ci.data)
+model.fit.data
+```
+
+Create a coefficient plot 
+```{r coef plot}
+ggplot(model.fit.data, aes(coefficient, beta, color = factor(beta)))+
+  geom_vline(xintercept = 0, lty=2, lwd=1, colour="grey50")+
+  geom_point(size=3, pch=20, position=position_dodge(width=0.5))+
+  geom_linerange(aes(xmax = CI2.5, xmin = CI97.5))+
+  theme_bw()+
+  xlab("Effect size")+
+  theme(legend.position = "none", axis.title.y = element_blank())+
+  ggtitle("TSLV model: SSF Parameter estimates")
+```
+
+## Footer
+```{r footer}
+sessionInfo()
+```
