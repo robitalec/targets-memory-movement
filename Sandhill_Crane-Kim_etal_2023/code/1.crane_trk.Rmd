@@ -1,0 +1,461 @@
+---
+title: "1.crane_trk"
+author: "Dennis Kim"
+date: '2022-04-05'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# knit setting
+library(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+options(width=150)
+opts_chunk$set(fig.width=18,fig.height=10)
+```
+
+# Preamble 
+
+call libraries
+```{r packages, message =FALSE, warning = FALSE}
+# data calling & wrangling 
+library(here)
+library(readr)
+library(tidyr)
+library(purrr)
+library(dplyr)
+library(lubridate)
+
+# spatial analysis 
+library(raster)
+library(sp)
+library(sf)
+library(rgdal)
+
+# movement analysis 
+library(amt)
+
+# visualization
+library(ggplot2)
+```
+
+# Read each year filtered summer crane postional data 
+
+import the filtered summer crane data
+```{r import per yr data}
+# call summer data 
+crane <- read_rds(here("data", "crane_tot.Rdata"))
+
+# add a column that has julian date information 
+crane$JD <- yday(crane$timestamp)
+
+# subset the data for only 1 individual - 5A
+crane.5A <- crane %>% dplyr::filter(id == "5A") 
+
+# look at the 5A data structure 
+head(crane.5A)
+```
+
+subset the data by year
+```{r subset per yr}
+# 2015
+crane15 <- crane.5A %>% filter(year == "2015") %>% filter(timestamp > "2015-07-15 00:00:00" & timestamp < "2015-09-22 23:59:59")
+  
+# 2016
+crane16 <- crane.5A %>% filter(year == "2016") %>% filter(timestamp > "2016-07-15 00:00:00" & timestamp < "2016-09-22 23:59:59")
+
+# 2017
+crane17 <- crane.5A %>% filter(year == "2017") %>% filter(timestamp > "2017-07-15 00:00:00" & timestamp < "2017-09-22 23:59:59")
+
+# 2018
+crane18 <- crane.5A %>% filter(year == "2018") %>% filter(timestamp > "2018-07-15 00:00:00" & timestamp < "2018-09-22 23:59:59")
+
+# 2019
+crane19 <- crane.5A %>% filter(year == "2019") %>% filter(timestamp > "2019-07-15 00:00:00" & timestamp < "2019-09-22 23:59:59")
+
+# 2020 
+crane20 <- crane.5A %>% filter(year == "2020") %>% filter(timestamp > "2020-07-15 00:00:00" & timestamp < "2020-09-22 23:59:59")
+```
+
+# Prepare environmental data
+
+import raster layers 
+```{r raster layers}
+# NLCD2016 Landcover layers (30m resolution)
+NLCD2016 <- raster(here("data/NLCD_2016_Land_Cover", "NLCD_2016_Land_Cover_L48_20190424.img"))
+
+# 2015 Occurrence distributions (ODs) layer for 2015 
+OD15 <- raster(here("data/projected_OD_5A_tif", "OD15.tif"))
+
+# 2016 ODs
+OD16 <- raster(here("data/projected_OD_5A_tif", "OD16.tif"))
+
+# 2017 ODs
+OD17 <- raster(here("data/projected_OD_5A_tif", "OD17.tif"))
+
+# 2018 ODs
+OD18 <- raster(here("data/projected_OD_5A_tif", "OD18.tif"))
+
+# 2019 ODs
+OD19 <- raster(here("data/projected_OD_5A_tif", "OD19.tif"))
+
+# 2020 ODs
+OD20 <- raster(here("data/projected_OD_5A_tif", "OD20.tif"))
+```
+
+crop the NLCD raster with the boundary of our interest 
+```{r crop the raster}
+# call the extent 
+myExtent <- readOGR(here("data/shapefile", "SummerCrane.shp"))
+
+# get the same crs as the NLCD 2016 layer 
+myExtent <- spTransform(myExtent, crs(proj4string(NLCD2016)))
+
+# crop the NLCD 2016 layer based on the extent 
+new_NLCD16 <- crop(x = NLCD2016, y = myExtent)
+```
+
+# Create tracks per year 
+
+convert the crane data to trk object
+```{r convert trk object, warning=FALSE, message=FALSE}
+# create a track of all individuals together 
+
+#2015
+trk15 <- amt::make_track(crane15, .x=long, .y=lat, .t=timestamp, id = id, sex=sex, age=age, year=year, age_yr=age_yr, JD=JD, crs= CRS("+init=epsg:4326"))
+
+#2016
+trk16 <- amt::make_track(crane16, .x=long, .y=lat, .t=timestamp, id = id, sex=sex, age=age, year=year, age_yr=age_yr, JD=JD, crs= CRS("+init=epsg:4326"))
+
+#2017
+trk17 <- amt::make_track(crane17, .x=long, .y=lat, .t=timestamp, id = id, sex=sex, age=age, year=year, age_yr=age_yr, JD=JD, crs= CRS("+init=epsg:4326"))
+
+#2018
+trk18 <- amt::make_track(crane18, .x=long, .y=lat, .t=timestamp, id = id, sex=sex, age=age, year=year, age_yr=age_yr, JD=JD, crs= CRS("+init=epsg:4326"))
+
+#2019
+trk19 <- amt::make_track(crane19, .x=long, .y=lat, .t=timestamp, id = id, sex=sex, age=age, year=year, age_yr=age_yr, JD=JD, crs= CRS("+init=epsg:4326"))
+
+#2020
+trk20 <- amt::make_track(crane20, .x=long, .y=lat, .t=timestamp, id = id, sex=sex, age=age, year=year, age_yr=age_yr, JD=JD, crs= CRS("+init=epsg:4326"))
+```
+
+```{r convert the crs of track}
+# convert the crs of trk object as same as other raster layers (use NAD83)
+trk15 <- amt::transform_coords(trk15, st_crs(5070))
+trk16 <- amt::transform_coords(trk16, st_crs(5070))
+trk17 <- amt::transform_coords(trk17, st_crs(5070))
+trk18 <- amt::transform_coords(trk18, st_crs(5070))
+trk19 <- amt::transform_coords(trk19, st_crs(5070))
+trk20 <- amt::transform_coords(trk20, st_crs(5070))
+```
+
+# Resample tracks and extract covariates
+
+change the track point to step 
+1. Resample track and filter bursts 
+2. Convert track to steps 
+3. Create random steps 
+4. Extract covariate values 
+
+look at the sampling rates per id
+```{r nest data and look at the sampling rates, warning=FALSE, message=FALSE}
+# nested by id 
+trk_nest15 <- trk15 %>% nest(data = - c("id", "year","age_yr","age","sex"))
+trk_nest16 <- trk16 %>% nest(data = - c("id", "year","age_yr","age","sex"))
+trk_nest17 <- trk17 %>% nest(data = - c("id", "year","age_yr","age","sex"))
+trk_nest18 <- trk18 %>% nest(data = - c("id", "year","age_yr","age","sex"))
+trk_nest19 <- trk19 %>% nest(data = - c("id", "year","age_yr","age","sex"))
+trk_nest20 <- trk20 %>% nest(data = - c("id", "year","age_yr","age","sex"))
+
+# check the data 
+trk_nest15 <- trk_nest15[order(trk_nest15[,1]),]
+trk_nest16 <- trk_nest16[order(trk_nest16[,1]),]
+trk_nest17 <- trk_nest17[order(trk_nest17[,1]),]
+trk_nest18 <- trk_nest18[order(trk_nest18[,1]),]
+trk_nest19 <- trk_nest19[order(trk_nest19[,1]),]
+trk_nest20 <- trk_nest20[order(trk_nest20[,1]),]
+
+# check the sampling rates of the data 
+
+# 2015 - 30 mins
+trk15 %>% nest(data = - c("id", "year","age_yr","age","sex")) %>% 
+  mutate(data = map(data, ~.x %>% 
+                      summarize_sampling_rate)) %>% unnest(data) %>% select(id, year, median, unit)
+
+# 2016 - 15 mins
+trk16 %>% nest(data = - c("id", "year","age_yr","age","sex")) %>%
+  mutate(data = map(data, ~.x %>% 
+                      summarize_sampling_rate)) %>% unnest(data) %>% select(id, year, median, unit)
+
+# 2017 - 15 mins 
+trk17 %>% nest(data = - c("id", "year","age_yr","age","sex")) %>% 
+  mutate(data = map(data, ~.x %>% 
+                      summarize_sampling_rate)) %>% unnest(data) %>% select(id, year, median, unit)
+
+# 2018 - 15 mins
+trk18 %>% nest(data = - c("id", "year","age_yr","age","sex")) %>% 
+  mutate(data = map(data, ~.x %>% 
+                      summarize_sampling_rate)) %>% unnest(data) %>% select(id, year, median, unit)
+
+# 2019 - 15 mins 
+trk19 %>% nest(data = - c("id", "year","age_yr","age","sex")) %>% 
+  mutate(data = map(data, ~.x %>% 
+                      summarize_sampling_rate)) %>% unnest(data) %>% select(id, year, median, unit)
+
+# 2020 - 15 mins 
+trk20 %>% nest(data = - c("id", "year","age_yr","age","sex")) %>% 
+  mutate(data = map(data, ~.x %>% 
+                      summarize_sampling_rate)) %>% unnest(data) %>% select(id, year, median, unit)
+```
+
+resample the tracks by 30 mins and extract covariates 
+```{r resample trks and generate steps}
+# create both observed and available steps of individuals and extract covariates info 
+
+# create steps and available steps 
+trk_resample15 <- trk_nest15 %>% 
+  dplyr::mutate(data = map(data, ~ .x %>% 
+                             track_resample(rate = minutes(30), tolerance = minutes(5)) %>%
+                             steps_by_burst() %>% 
+                             random_steps()
+                           ))
+
+trk_resample16 <- trk_nest16 %>% 
+  dplyr::mutate(data = map(data, ~ .x %>% 
+                             track_resample(rate = minutes(30), tolerance = minutes(5)) %>%
+                             steps_by_burst() %>% 
+                             random_steps()
+                           ))
+
+trk_resample17 <- trk_nest17 %>% 
+  dplyr::mutate(data = map(data, ~ .x %>% 
+                             track_resample(rate = minutes(30), tolerance = minutes(5)) %>%
+                             steps_by_burst() %>% 
+                             random_steps()
+                           ))
+
+trk_resample18 <- trk_nest18 %>% 
+  dplyr::mutate(data = map(data, ~ .x %>% 
+                             track_resample(rate = minutes(30), tolerance = minutes(5)) %>%
+                             steps_by_burst() %>% 
+                             random_steps()
+                           ))
+
+trk_resample19 <- trk_nest19 %>% 
+  dplyr::mutate(data = map(data, ~ .x %>% 
+                             track_resample(rate = minutes(30), tolerance = minutes(5)) %>%
+                             steps_by_burst() %>% 
+                             random_steps()
+                           ))
+
+trk_resample20 <- trk_nest20 %>% 
+  dplyr::mutate(data = map(data, ~ .x %>% 
+                             track_resample(rate = minutes(30), tolerance = minutes(5)) %>%
+                             steps_by_burst() %>% 
+                             random_steps()
+                           ))
+
+```
+
+extract ratser layer values (crop and landcover)
+```{r extract covariates}
+# extract landcover classes and unnest the data 
+trk_resample15 <- trk_resample15 %>%
+  dplyr::mutate(data = map(data, ~ .x %>% 
+                             extract_covariates(new_NLCD16)
+                           )) %>% unnest(data) 
+
+trk_resample16 <- trk_resample16 %>%
+  dplyr::mutate(data = map(data, ~ .x %>% 
+                             extract_covariates(new_NLCD16) %>% 
+                             extract_covariates(OD15)
+                           )) %>% unnest(data) 
+
+trk_resample17 <- trk_resample17 %>%
+  dplyr::mutate(data = map(data, ~ .x %>% 
+                             extract_covariates(new_NLCD16) %>% 
+                             extract_covariates(OD15) %>% 
+                             extract_covariates(OD16)
+                           )) %>% unnest(data) 
+
+trk_resample18 <- trk_resample18 %>%
+  dplyr::mutate(data = map(data, ~ .x %>% 
+                             extract_covariates(new_NLCD16) %>% 
+                             extract_covariates(OD15) %>% 
+                             extract_covariates(OD16) %>% 
+                             extract_covariates(OD17)
+                           )) %>% unnest(data) 
+
+trk_resample19 <- trk_resample19 %>%
+  dplyr::mutate(data = map(data, ~ .x %>% 
+                             extract_covariates(new_NLCD16) %>% 
+                             extract_covariates(OD15) %>% 
+                             extract_covariates(OD16) %>% 
+                             extract_covariates(OD17) %>% 
+                             extract_covariates(OD18)
+                           )) %>% unnest(data) 
+
+trk_resample20 <- trk_resample20 %>%
+  dplyr::mutate(data = map(data, ~ .x %>% 
+                             extract_covariates(new_NLCD16) %>% 
+                             extract_covariates(OD15) %>% 
+                             extract_covariates(OD16) %>% 
+                             extract_covariates(OD17) %>% 
+                             extract_covariates(OD18) %>% 
+                             extract_covariates(OD19)
+                           )) %>% unnest(data) 
+```
+
+```{r modified the data1}
+# rename the column of the landcover 
+# 2015
+colnames(trk_resample15)[18] <- "nlcd" 
+
+#2016
+colnames(trk_resample16)[18] <- "nlcd"
+colnames(trk_resample16)[19] <- "OD15"
+
+#2017
+colnames(trk_resample17)[18] <- "nlcd"
+colnames(trk_resample17)[19] <- "OD15"
+colnames(trk_resample17)[20] <- "OD16"
+ 
+#2018
+colnames(trk_resample18)[18] <- "nlcd"
+colnames(trk_resample18)[19] <- "OD15"
+colnames(trk_resample18)[20] <- "OD16"
+colnames(trk_resample18)[21] <- "OD17"
+
+#2019
+colnames(trk_resample19)[18] <- "nlcd"
+colnames(trk_resample19)[19] <- "OD15"
+colnames(trk_resample19)[20] <- "OD16"
+colnames(trk_resample19)[21] <- "OD17"
+colnames(trk_resample19)[22] <- "OD18"
+
+#2020
+colnames(trk_resample20)[18] <- "nlcd"
+colnames(trk_resample20)[19] <- "OD15"
+colnames(trk_resample20)[20] <- "OD16"
+colnames(trk_resample20)[21] <- "OD17"
+colnames(trk_resample20)[22] <- "OD18"
+colnames(trk_resample20)[23] <- "OD19"
+```
+
+```{r modified the data2}
+# set the NAs in ODs columns to 0
+
+# 2016
+trk_resample16$OD15[is.na(trk_resample16$OD15)] <- 0
+
+# 2017
+trk_resample17$OD15[is.na(trk_resample17$OD15)] <- 0
+trk_resample17$OD16[is.na(trk_resample17$OD16)] <- 0
+
+# 2018
+trk_resample18$OD15[is.na(trk_resample18$OD15)] <- 0
+trk_resample18$OD16[is.na(trk_resample18$OD16)] <- 0
+trk_resample18$OD17[is.na(trk_resample18$OD17)] <- 0
+
+# 2019
+trk_resample19$OD15[is.na(trk_resample19$OD15)] <- 0
+trk_resample19$OD16[is.na(trk_resample19$OD16)] <- 0
+trk_resample19$OD17[is.na(trk_resample19$OD17)] <- 0
+trk_resample19$OD18[is.na(trk_resample19$OD18)] <- 0
+
+# 2020
+trk_resample20$OD15[is.na(trk_resample20$OD15)] <- 0
+trk_resample20$OD16[is.na(trk_resample20$OD16)] <- 0
+trk_resample20$OD17[is.na(trk_resample20$OD17)] <- 0
+trk_resample20$OD18[is.na(trk_resample20$OD18)] <- 0
+trk_resample20$OD19[is.na(trk_resample20$OD19)] <- 0
+
+# set the zero to NA
+trk_resample15$nlcd[trk_resample15$nlcd == 0] <- NA
+trk_resample16$nlcd[trk_resample16$nlcd == 0] <- NA
+trk_resample17$nlcd[trk_resample17$nlcd == 0] <- NA
+trk_resample18$nlcd[trk_resample18$nlcd == 0] <- NA
+trk_resample19$nlcd[trk_resample19$nlcd == 0] <- NA
+trk_resample20$nlcd[trk_resample20$nlcd == 0] <- NA
+
+# omit the NA values in nlcd 
+trk_resample15 <- trk_resample15 %>% tidyr::drop_na()
+trk_resample16 <- trk_resample16 %>% tidyr::drop_na()
+trk_resample17 <- trk_resample17 %>% tidyr::drop_na()
+trk_resample18 <- trk_resample18 %>% tidyr::drop_na()
+trk_resample19 <- trk_resample19 %>% tidyr::drop_na()
+trk_resample20 <- trk_resample20 %>% tidyr::drop_na()
+
+# change the order of the data 
+trk_resample16 <- trk_resample16[, c(1:17,19,18)]
+trk_resample17 <- trk_resample17[, c(1:17, 19, 20, 18)]
+trk_resample18 <- trk_resample18[, c(1:17, 19, 20, 21, 18)]
+trk_resample19 <- trk_resample19[, c(1:17, 19, 20, 21, 22, 18)]
+trk_resample20 <- trk_resample20[, c(1:17, 19, 20, 21, 22, 23, 18)]
+```
+
+Now, we've got values but more categories for both NLCD landcover layer. David made a table in excel of all the nlcd values and then categories that I grouped them in. 
+
+## Landcover info
+```{r landuse category names}
+# now add in category names and descriptions 
+nlcd <- read_csv(here("data/NLCD_2016_Land_Cover/nlcd_legend.csv"))
+
+# rename 2nd column to 'nlcd' to make join simpler 
+colnames(nlcd)[2] <- 'nlcd'
+
+# join the actual nlcd habitat name and also a consolidate category from 20 > 8 levels 
+summer_trk15 <- left_join(trk_resample15, nlcd[,1:3])
+summer_trk16 <- left_join(trk_resample16, nlcd[,1:3])
+summer_trk17 <- left_join(trk_resample17, nlcd[,1:3])
+summer_trk18 <- left_join(trk_resample18, nlcd[,1:3])
+summer_trk19 <- left_join(trk_resample19, nlcd[,1:3])
+summer_trk20 <- left_join(trk_resample20, nlcd[,1:3])
+```
+
+now there is a column called 'nlcd' with the original nlcd value.
+- column 'name': a word description of the original nlcd value 
+- column 'category': a binned version 
+```{r glimpse the merged data}
+# rename the row name "planted_cultivated" to "cultivated"
+summer_trk15$category[summer_trk15$category == "planted_cultivated"] <- "cultivated"
+summer_trk16$category[summer_trk16$category == "planted_cultivated"] <- "cultivated"
+summer_trk17$category[summer_trk17$category == "planted_cultivated"] <- "cultivated"
+summer_trk18$category[summer_trk18$category == "planted_cultivated"] <- "cultivated"
+summer_trk19$category[summer_trk19$category == "planted_cultivated"] <- "cultivated"
+summer_trk20$category[summer_trk20$category == "planted_cultivated"] <- "cultivated"
+
+# rename the column names of category and name to nlcd specified
+
+# nlcd category name change
+colnames(summer_trk15)[19] <- 'nlcd_category'
+colnames(summer_trk16)[20] <- 'nlcd_category'
+colnames(summer_trk17)[21] <- 'nlcd_category'
+colnames(summer_trk18)[22] <- 'nlcd_category'
+colnames(summer_trk19)[23] <- 'nlcd_category'
+colnames(summer_trk20)[24] <- 'nlcd_category'
+
+# nlcd name change
+colnames(summer_trk15)[20] <- 'nlcd_name'
+colnames(summer_trk16)[21] <- 'nlcd_name'
+colnames(summer_trk17)[22] <- 'nlcd_name'
+colnames(summer_trk18)[23] <- 'nlcd_name'
+colnames(summer_trk19)[24] <- 'nlcd_name'
+colnames(summer_trk20)[25] <- 'nlcd_name'
+```
+
+## save the extracted resampled trk data
+```{r save the data}
+# save the filtered resampled trk data with covariates
+#write_rds(summer_trk15, path = here("data", "summer_trk15_5A.Rdata"))
+#write_rds(summer_trk16, path = here("data", "summer_trk16_5A.Rdata"))
+#write_rds(summer_trk17, path = here("data", "summer_trk17_5A.Rdata"))
+#write_rds(summer_trk18, path = here("data", "summer_trk18_5A.Rdata"))
+#write_rds(summer_trk19, path = here("data", "summer_trk19_5A.Rdata"))
+#write_rds(summer_trk20, path = here("data", "summer_trk20_5A.Rdata"))
+```
+
+# Document Footer 
+```{r session info}
+sessionInfo()
+```
