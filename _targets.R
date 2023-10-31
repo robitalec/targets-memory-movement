@@ -15,7 +15,5 @@ targets::tar_source('R')
 
 
 # Variables ---------------------------------------------------------------
-
-
-
+path_mule_deer_445 <- 'data/Mule_Deer-Merkle_etal_2019/GPSdata_muldeer445.rds'
 
