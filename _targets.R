@@ -33,6 +33,11 @@ c(
   tar_target(
     filter_spring_second_year,
     filter_mule_deer(mule_deer_445, migration_table, 2, 'spring')
-  )
+  ),
+  tar_target(
+    filter_spring_first_year,
+    filter_mule_deer(mule_deer_445, migration_table, 1, 'spring')
+  ),
+
 )
 
