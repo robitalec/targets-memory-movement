@@ -25,3 +25,8 @@ c(
   tar_target(
     mule_deer_445,
     readRDS(path_mule_deer_445)
+  ),
+  tar_target(
+    migration_table,
+    get_migration_table()
+  ),
