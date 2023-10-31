@@ -17,3 +17,11 @@ targets::tar_source('R')
 # Variables ---------------------------------------------------------------
 path_mule_deer_445 <- 'data/Mule_Deer-Merkle_etal_2019/GPSdata_muldeer445.rds'
 
+
+
+
+# Adapting Mule_Deer-Merkle_etal_2019/MemorySSF_workflow.R ----------------
+c(
+  tar_target(
+    mule_deer_445,
+    readRDS(path_mule_deer_445)
