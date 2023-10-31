@@ -30,3 +30,9 @@ c(
     migration_table,
     get_migration_table()
   ),
+  tar_target(
+    filter_spring_second_year,
+    filter_mule_deer(mule_deer_445, migration_table, 2, 'spring')
+  )
+)
+
